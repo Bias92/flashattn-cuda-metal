@@ -1,0 +1,1 @@
+# naive attention reference (baseline)
