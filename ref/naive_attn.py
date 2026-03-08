@@ -1,50 +1,50 @@
-import math
+"""
+Naive (standard) attention implementation for correctness verification.
+O(N^2) memory - materializes full attention matrix.
+"""
+
 import torch
+import torch.nn.functional as F
 
 
-def naive_attention(q, k, v, causal: bool = False):
+def naive_attention(Q: torch.Tensor, K: torch.Tensor, V: torch.Tensor) -> torch.Tensor:
     """
-    Reference attention (baseline).
-    Shapes (recommended): q,k,v = (B, H, S, D)  fp16/bf16/float32
-    Returns: o = (B, H, S, D)
+    Standard scaled dot-product attention.
+    
+    Args:
+        Q: [B, H, N, D] query
+        K: [B, H, N, D] key
+        V: [B, H, N, D] value
+    
+    Returns:
+        O: [B, H, N, D] output
+        L: [B, H, N] logsumexp (for backward pass verification)
     """
-    assert q.ndim == 4 and k.ndim == 4 and v.ndim == 4
-    B, H, S, D = q.shape
-    assert k.shape == (B, H, S, D) and v.shape == (B, H, S, D)
+    B, H, N, D = Q.shape
+    scale = D ** -0.5
 
-    # Do softmax in fp32 for numerical stability
-    qf = q.float()
-    kf = k.float()
-    vf = v.float()
+    # S = Q @ K^T * scale  ->  [B, H, N, N]
+    S = torch.matmul(Q, K.transpose(-2, -1)) * scale
 
-    scale = 1.0 / math.sqrt(D)
-    scores = torch.matmul(qf, kf.transpose(-2, -1)) * scale  # (B,H,S,S)
+    # P = softmax(S)  ->  [B, H, N, N]
+    P = F.softmax(S, dim=-1)
 
-    if causal:
-        # mask upper triangle (j > i)
-        mask = torch.triu(torch.ones((S, S), device=q.device, dtype=torch.bool), diagonal=1)
-        scores = scores.masked_fill(mask, float("-inf"))
+    # O = P @ V  ->  [B, H, N, D]
+    O = torch.matmul(P, V)
 
-    probs = torch.softmax(scores, dim=-1)  # (B,H,S,S)
-    out = torch.matmul(probs, vf)          # (B,H,S,D)
+    # logsumexp for backward verification
+    L = torch.logsumexp(S, dim=-1)  # [B, H, N]
 
-    # return in original dtype (like real kernels)
-    return out.to(dtype=q.dtype)
-
-
-@torch.no_grad()
-def max_abs_err(a, b):
-    return (a.float() - b.float()).abs().max().item()
+    return O, L
 
 
 if __name__ == "__main__":
-    # quick sanity run
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    B, H, S, D = 2, 4, 128, 64
-    q = torch.randn(B, H, S, D, device=device, dtype=torch.float16)
-    k = torch.randn(B, H, S, D, device=device, dtype=torch.float16)
-    v = torch.randn(B, H, S, D, device=device, dtype=torch.float16)
+    torch.manual_seed(42)
+    B, H, N, D = 2, 4, 128, 64
+    Q = torch.randn(B, H, N, D, device="cuda", dtype=torch.float32)
+    K = torch.randn(B, H, N, D, device="cuda", dtype=torch.float32)
+    V = torch.randn(B, H, N, D, device="cuda", dtype=torch.float32)
 
-    o_nc = naive_attention(q, k, v, causal=False)
-    o_c  = naive_attention(q, k, v, causal=True)
-    print("ok", o_nc.shape, o_c.shape)
+    O, L = naive_attention(Q, K, V)
+    print(f"Q: {Q.shape}, O: {O.shape}, L: {L.shape}")
+    print(f"O max: {O.max().item():.4f}, O min: {O.min().item():.4f}")
