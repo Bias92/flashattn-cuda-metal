@@ -28,7 +28,7 @@ def test_forward(B, H, N, D, atol=1e-3, rtol=1e-3):
     O_ref, L_ref = naive_attention(Q, K, V)
 
     # FlashAttention
-    O_flash = flash_attn_cuda.forward(Q, K, V)
+    O_flash, L_flash = flash_attn_cuda.forward(Q, K, V)
 
     # Compare
     max_diff = (O_flash - O_ref).abs().max().item()
