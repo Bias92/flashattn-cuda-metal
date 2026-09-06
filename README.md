@@ -3,11 +3,11 @@
 A FlashAttention-2 forward kernel written from scratch in CUDA without CUTLASS, for the RTX 4060 Ti.
 It takes fp16 inputs, accumulates in fp32, and supports head dim 64 and non-causal attention only.
 
-## Latency vs PyTorch SDPA Flash
+## Latency vs PyTorch SDPA (FlashAttention-2 backend)
 
 B=1, H=8, D=64, fp16. 10 paired runs, median. Positive gap = custom slower.
 
-| N | Custom CUDA (O+L) | PyTorch Flash | gap |
+| N | Custom CUDA (O+L) | PyTorch SDPA (FA2) | gap |
 |---:|---:|---:|---:|
 | 1024 | 0.0618 ms | 0.0572 ms | +6.75% |
 | 2048 | 0.2194 ms | 0.2183 ms | +1.24% |
@@ -17,7 +17,7 @@ B=1, H=8, D=64, fp16. 10 paired runs, median. Positive gap = custom slower.
 
 MiB above the Q/K/V inputs. HF eager = Transformers `eager_attention_forward`, unmodified.
 
-| N | Custom CUDA (O+L) | PyTorch Flash | HF eager |
+| N | Custom CUDA (O+L) | PyTorch SDPA (FA2) | HF eager |
 |---:|---:|---:|---:|
 | 1024 | 1.0 | 1.0 | 64.0 |
 | 2048 | 2.1 | 2.1 | 256.0 |
