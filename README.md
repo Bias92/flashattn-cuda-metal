@@ -3,26 +3,6 @@
 CUDA attention forward for RTX 4060 Ti. FP16 inputs and output, FP32 accumulation,
 non-causal self-attention, head dimension 64.
 
-## Run
-
-Use an environment with CUDA-enabled PyTorch, the CUDA toolkit and Ninja installed.
-Run these commands from the repository root:
-
-```bash
-python3 -m pip install --no-build-isolation -e .
-python3 tests/test_attention_forward.py
-python3 bench/compare_pytorch.py
-```
-
-The package builds only [attention_forward.cu](cuda/attention_forward.cu).
-The test and benchmark also support JIT compilation without installing the package.
-
-To profile one forward launch after warmup:
-
-```bash
-ncu --profile-from-start off python3 bench/profile_once.py 4096
-```
-
 ## Measurements
 
 RTX 4060 Ti, WSL2 Ubuntu, CUDA 12.8, PyTorch 2.10.0+cu128.
