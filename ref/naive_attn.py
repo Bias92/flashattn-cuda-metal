@@ -18,7 +18,7 @@ def naive_attention(Q: torch.Tensor, K: torch.Tensor, V: torch.Tensor) -> torch.
     
     Returns:
         O: [B, H, N, D] output
-        L: [B, H, N] logsumexp (for backward pass verification)
+        L: [B, H, N] logsumexp
     """
     B, H, N, D = Q.shape
     scale = D ** -0.5
@@ -32,7 +32,7 @@ def naive_attention(Q: torch.Tensor, K: torch.Tensor, V: torch.Tensor) -> torch.
     # O = P @ V  ->  [B, H, N, D]
     O = torch.matmul(P, V)
 
-    # logsumexp for backward verification
+    # Row-wise logsumexp
     L = torch.logsumexp(S, dim=-1)  # [B, H, N]
 
     return O, L
