@@ -1,7 +1,7 @@
 """Profile one current-kernel forward+L launch with Nsight Compute.
 
 Usage:
-  python3 bench/profile.py 1024
+  python3 bench/profile_once.py 1024
 
 Use ncu --profile-from-start off to exclude warmup and tensor initialization.
 """

@@ -1,32 +1,14 @@
-"""
-Peak GPU memory vs the official eager attention and PyTorch's SDPA backends.
+"""Peak allocated GPU memory for FP16 attention forward.
 
-Why this script exists: the old demo compared against a hand-written
-matmul/softmax expression. A self-authored baseline is not falsifiable, so
-every baseline here is an unmodified, importable implementation:
+Baselines: Hugging Face Llama eager_attention_forward and PyTorch SDPA with
+FLASH_ATTENTION or MATH selected explicitly. On the recorded torch 2.10 run,
+eager uses FP16 matmuls and FP32 softmax; MATH uses FP32 intermediates.
+The script prints CUDA kernel symbols for both before measuring memory.
 
-  eager   transformers.models.llama.modeling_llama.eager_attention_forward
-          -> the function HuggingFace runs for attn_implementation="eager".
-             Imported as-is (not copied). matmul in the input dtype, softmax
-             in fp32 then cast back, matmul in the input dtype. This is what
-             "eager attention" means in the ecosystem.
-  flash   sdpa_kernel(SDPBackend.FLASH_ATTENTION) + F.scaled_dot_product_attention
-  math    sdpa_kernel(SDPBackend.MATH) + F.scaled_dot_product_attention
-          -> PyTorch's composite reference. Accepts fp16 inputs but keeps
-             ALL intermediates (QK^T, softmax, PV) in fp32 on torch 2.10
-             (observed). eager keeps matmuls in fp16 and only the softmax in
-             fp32, so its footprint is closer to a real fp16 deployment; math
-             is shown for reference with that difference labeled.
-
-The compute dtype of eager and math is OBSERVED from the CUDA kernel symbols
-they launch and printed before any ratio.
-
-Peak = max_memory_allocated during the call minus memory already allocated
-(the inputs). Allocator statistics do not depend on GPU contention, so no
-idle gate is needed. Memory only; latency claims live in compare_pytorch.py.
+Peak = max_memory_allocated during the call minus the allocation before it,
+excluding the existing Q/K/V tensors. Latency is measured in compare_pytorch.py.
 """
 import re
-import sys
 import types
 from pathlib import Path
 
@@ -36,13 +18,7 @@ from torch.nn.attention import sdpa_kernel, SDPBackend
 from torch.profiler import profile, ProfilerActivity
 from torch.utils.cpp_extension import load
 
-# bench/profile.py shadows the stdlib "profile" module when this script is run as
-# "python3 bench/compare_memory.py" (script dir becomes sys.path[0]); transformers
-# imports it indirectly and fails. Drop the script dir before importing.
-_here = str(Path(__file__).resolve().parent)
-sys.path[:] = [p for p in sys.path if p not in ("", _here, str(Path(_here)))]
-
-import transformers  # noqa: E402
+import transformers
 from transformers.models.llama.modeling_llama import eager_attention_forward
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -168,13 +144,9 @@ def main():
 
     print("=" * 108)
     print("ours  : attention_forward.forward (O + L).   flash: SDPA FLASH_ATTENTION backend.")
-    print(f"eager : transformers eager_attention_forward, unmodified (observed {sorted(t_eager)}: "
-          "fp16 matmuls, softmax computed in fp32 then cast back -- that is how eager runs in practice).")
-    print(f"math  : SDPA MATH backend (observed {sorted(t_math)}); accepts fp16 but computes all "
-          "intermediates (QK^T, softmax, PV) in fp32 on this torch. Shown for reference; the")
-    print("        difference from eager is degree (all-fp32 vs fp32-softmax-only), not kind.")
-    print("NxN fp16: one N x N x H fp16 score tensor = lower bound for any implementation that "
-          "materializes scores in fp16.")
+    print(f"eager : Hugging Face Llama eager_attention_forward. Observed scalar types: {sorted(t_eager)}.")
+    print(f"math  : SDPA MATH backend. Observed scalar types: {sorted(t_math)}.")
+    print("NxN fp16: size of one N x N x H FP16 score tensor.")
 
 
 if __name__ == "__main__":

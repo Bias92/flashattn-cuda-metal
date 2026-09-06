@@ -21,7 +21,6 @@ events and paired runs.
 
 The full Nsight Compute reports, text exports, and original uncropped UI
 captures are kept under `ncu/` and `ncu_sections/`.
-Archived reports and screenshots retain their original kernel names.
 
 The following FP32 and Custom CUDA profiles use different shapes and dtypes.
 Their durations are not directly comparable.

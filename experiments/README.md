@@ -47,23 +47,11 @@ The following results were recorded before the directory cleanup.
 The current kernel adds full-tile specialization to the precomputed-addresses
 implementation. Old `fa3`/`db_full` labels in figures refer to these local revisions.
 
-These are revisions of this project's own kernel.
-
-| Stage | What changed |
-|---|---|
-| FP32 baseline | plain tiled FlashAttention forward |
-| WMMA path | first Tensor Core attempt |
-| mma | direct `mma.sync`, register softmax, no shared S/P round trip |
-| mma-db | K/V `cp.async` double buffer |
-| db_addr | removed repeated integer address calculations |
-| Custom CUDA | full-tile fast path for common benchmark sizes |
-
 At `N=4096`, forward latency decreased from about 3.2 ms to about 0.873 ms.
 
 <p align="center">
   <img src="../docs/profiling/fa3_optimization_chain.png" width="720" alt="Optimization chain">
 </p>
-
 
 The table includes Custom CUDA (+L) and experimental variants. Only Custom CUDA (+L)
 is used in the main [PyTorch Flash comparison](../bench/compare_pytorch.py).
