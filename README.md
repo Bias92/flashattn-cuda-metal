@@ -1,39 +1,21 @@
 # flashattn-cuda
 
-CUDA attention forward for RTX 4060 Ti. FP16 inputs and output, FP32 accumulation,
-non-causal self-attention, head dimension 64.
+FlashAttention-2 style forward in CUDA and inline PTX, no CUTLASS.
+FP16 in, FP32 accumulate, D=64, non-causal. RTX 4060 Ti (sm_89).
 
-## Measurements
+## Latency vs PyTorch SDPA Flash
 
-RTX 4060 Ti, WSL2 Ubuntu, CUDA 12.8, PyTorch 2.10.0+cu128.
-B=1, H=8, D=64, FP16 inputs, non-causal forward.
-[Run record, September 6, 2026](bench/results/rerun_2026-09-06_rtx4060ti.md).
+B=1, H=8, D=64, fp16. 10 paired runs, median. Positive gap = custom slower.
 
-### Latency
-
-[compare_pytorch.py](bench/compare_pytorch.py) compares the current CUDA kernel with
-`torch.nn.functional.scaled_dot_product_attention`, explicitly selecting
-`SDPBackend.FLASH_ATTENTION`. Both calls use the same FP16 Q/K/V tensors.
-The custom call returns the output and softmax logsumexp (`O`, `L`).
-
-Ten paired runs, alternating execution order.
-
-| N | Custom CUDA (O+L) | PyTorch Flash | Paired latency gap |
+| N | Custom CUDA (O+L) | PyTorch Flash | gap |
 |---:|---:|---:|---:|
 | 1024 | 0.0618 ms | 0.0572 ms | +6.75% |
 | 2048 | 0.2194 ms | 0.2183 ms | +1.24% |
 | 4096 | 0.8544 ms | 0.8413 ms | +1.37% |
 
-Latency columns are medians for each implementation. The gap is the median of the
-per-pair differences `(custom / pytorch - 1) * 100`; positive means custom is slower.
+## Peak memory
 
-### Memory
-
-[compare_memory.py](bench/compare_memory.py) imports Hugging Face Llama's
-`eager_attention_forward` from Transformers 4.57.6. It uses FP16 matmuls and an
-FP32 softmax, then casts probabilities back to FP16.
-
-Peak allocated memory above the existing Q/K/V tensors, in MiB:
+MiB above the Q/K/V inputs. HF eager = Transformers `eager_attention_forward`, unmodified.
 
 | N | Custom CUDA (O+L) | PyTorch Flash | HF eager |
 |---:|---:|---:|---:|
@@ -42,32 +24,15 @@ Peak allocated memory above the existing Q/K/V tensors, in MiB:
 | 4096 | 4.1 | 4.1 | 1024.0 |
 | 8192 | 8.2 | 8.3 | 4096.0 |
 
-```bash
-python3 -m pip install transformers==4.57.6
-python3 bench/compare_memory.py
-```
+![](docs/profiling/memory.png)
 
-The script also measures SDPA MATH, which uses FP32 intermediates in this environment.
+## Kernel
 
-## Implementation
+`cuda/attention_forward.cu`. Four warps per block, each owns 16 query rows.
+QK and PV on `mma.sync`, softmax and O kept in registers, K/V double-buffered with `cp.async`.
+Not implemented: causal, dropout, varlen, GQA, backward.
 
-Q rows are split across four warps. QK and PV use `mma.sync`, with online softmax
-and output accumulators held in registers. Two shared-memory buffers prefetch K/V
-with `cp.async`. Shapes divisible by the tile sizes use a path without boundary
-checks; other shapes use the guarded path.
+## Files
 
-The [correctness test](tests/test_attention_forward.py) checks output and logsumexp
-against a PyTorch expression using FP16-rounded inputs and FP32 arithmetic. It
-includes non-aligned sequence lengths and larger input magnitudes.
-
-Supported: dense Q/K/V with identical shapes, D=64, non-causal forward.
-Causal masking, dropout, variable-length batches, GQA/MQA and backward are not implemented.
-
-## Earlier work
-
-- [Experiments](experiments/): previous kernels, their tests and benchmarks
-- [Profiling records](docs/profiling/): Nsight reports and screenshots
-- [Old demo recordings](docs/demo/): WMMA versus a separate matmul/softmax expression
-
-Experimental kernels are not included in the default build. Their scripts compile
-only the sources they use.
+`bench/compare_pytorch.py`, `bench/compare_memory.py`, `tests/test_attention_forward.py`.
+Run record: `bench/results/`. Earlier kernels: `experiments/`. Profiles: `docs/profiling/`.
