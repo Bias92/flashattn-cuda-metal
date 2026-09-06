@@ -147,7 +147,7 @@ Earlier FP32 and WMMA experiments:
 | `cuda/flash_attn_mma_db_full.cu` | benchmark kernel |
 | `cuda/flash_attn_mma_bc64.cu` | negative ablation |
 | `cuda/flash_attn_mma_db_full_intl.cu` | negative ablation |
-| `cuda/flash_attn_mma_fp16acc.cu` | precision trade-off ablation, not headline |
+| `cuda/flash_attn_mma_fp16acc.cu` | FP16 QK accumulation experiment |
 | `bench/bench_mma_headline.py` | db_full(+L) vs SDPA comparison |
 
 ## Correctness

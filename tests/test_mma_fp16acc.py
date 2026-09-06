@@ -1,8 +1,8 @@
-"""fp16-accumulate QK ablation: ACCURACY CHARACTERIZATION, not a pass gate.
+"""FP16-accumulate QK accuracy across input scales.
 
-Reports O/L error vs half-cast fp32 reference AND vs db_full (fp32-acc),
-across logit scales. Pass criteria only for amp=1 (atol 5e-3); amp>=8
-rows are expected to degrade — that degradation IS the ablation result.
+Reports O/L error against the FP32 reference from half-cast inputs and
+db_full (FP32 accumulation). Only amp=1 configurations affect the exit
+status. The amp>=4 configurations report errors without pass/fail checks.
 """
 import torch
 from torch.utils.cpp_extension import load

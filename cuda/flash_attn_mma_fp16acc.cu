@@ -8,12 +8,9 @@
 // unchanged. Layout of the f16 C fragment validated by
 // mma_probe.probe_qk_f16acc on sm_89.
 //
-// PAPER ABLATION ONLY — NOT a mainline candidate:
-//   - SDPA-Flash keeps fp32 accumulation, so any speed comparison
-//     against it is not apples-to-apples. Never use for headline.
-//   - Accuracy degrades with logit magnitude: fp16 ulp at |s|~40 is
-//     ~0.03; at amp=16-scale logits the S error reaches O(1) and
-//     softmax weights are visibly wrong. Measure, report, done.
+// Unlike db_full and SDPA-Flash, QK accumulation uses fp16 here.
+// Rounding error grows with logit magnitude: fp16 ulp at |s|~40 is
+// ~0.03; at amp=16-scale logits, S error reaches O(1).
 // ============================================================
 #include <torch/extension.h>
 #include <ATen/cuda/CUDAContext.h>

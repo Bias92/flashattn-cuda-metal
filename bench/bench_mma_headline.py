@@ -1,12 +1,9 @@
 """
-HEADLINE benchmark: db_full forward()+L vs PyTorch SDPA-Flash, 10 paired reps.
+Paired benchmark: db_full forward()+L vs PyTorch SDPA-Flash, 10 reps.
 
-This is the number that goes in README/paper. Protocol:
-  - clock burn-in
-  - per rep, both sides run back-to-back with alternating order
-  - gap computed PER REP (paired), median of 10 reported
-  - forward()+L on our side: SDPA-Flash also computes softmax_lse,
-    so the O-only path would be an unfair (lighter) comparison
+After clock warmup, both implementations run back-to-back with alternating
+order. The result is the median of 10 per-rep latency gaps. db_full returns
+O and L; SDPA-Flash also computes softmax_lse internally.
 """
 import torch
 import torch.nn.functional as F
@@ -45,7 +42,7 @@ def main():
     B, H, D = 1, 8, 64
     torch.manual_seed(42)
     print("=" * 100)
-    print(f"HEADLINE: db_full(+L) vs SDPA-Flash — {REPS} paired reps, "
+    print(f"db_full(+L) vs SDPA-Flash — {REPS} paired reps, "
           f"B={B} H={H} D={D} FP16 non-causal")
     print(f"GPU: {torch.cuda.get_device_name(0)}  torch {torch.__version__}")
     print("=" * 100)

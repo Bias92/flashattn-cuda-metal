@@ -1,16 +1,14 @@
 // ============================================================
 // mma_probe.cu — layout validation for mma.sync.m16n8k16 + ldmatrix
 //
-// Purpose: empirically verify, on real hardware, every register-layout
-// assumption the mma kernel relies on BEFORE building the kernel:
+// Tests operand and accumulator register layouts on the GPU:
 //   1. A operand:  ldmatrix.x4 on row-major Q-style storage
 //   2. B operand (QK):  ldmatrix.x2 (no trans) on K-style storage [n][k]
 //   3. B operand (PV):  ldmatrix.x2.trans on V-style storage [k][n]
 //   4. C accumulator -> A operand reuse (the FlashAttention register trick)
 //   5. C store layout: c0,c1 -> (row=l/4, col=2(l%4),+1); c2,c3 -> row+8
 //
-// Each probe runs end-to-end through a real mma, so a wrong assumption
-// shows up as a wrong matrix, not a silent layout bug later.
+// Each probe compares the mma output with a reference matrix.
 // ============================================================
 #include <torch/extension.h>
 #include <c10/cuda/CUDAException.h>

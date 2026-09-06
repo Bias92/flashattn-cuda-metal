@@ -372,10 +372,7 @@ torch::Tensor mma_db_forward_only(torch::Tensor Q, torch::Tensor K, torch::Tenso
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("forward", &mma_db_forward, "MMA forward + cp.async double buffering: returns O half, L float");
-    // forward_only is TRUE O-only: WRITE_L=false template skips the epilogue
-    // logf + L stores and the host skips the L allocation entirely.
-    // CAVEAT for benchmarks: SDPA-Flash always computes softmax_lse, so
-    // O-only does strictly LESS work than SDPA -- use forward() (with L)
-    // numbers for headline comparisons.
+    // WRITE_L=false skips logf, L stores and the host-side L allocation.
+    // SDPA-Flash also computes logsumexp; forward() includes that work.
     m.def("forward_only", &mma_db_forward_only, "MMA forward (cp.async), true O-only (no L compute/alloc)");
 }

@@ -1,10 +1,10 @@
 """
-Variant shoot-out: mma-db(+L) vs db_addr(+L / O-only) vs db_full(+L / O-only)
+Variant comparison: mma-db(+L) vs db_addr(+L / O-only) vs db_full(+L / O-only)
 vs SDPA-Flash. Order rotated per rep.
 
-Headline comparisons must use forward()+L: SDPA always computes softmax_lse,
-so the O-only variants do strictly less work. The canonical headline number
-comes from bench_mma_headline.py (10-run paired), not this script.
+The O-only db_addr and db_full paths skip L computation. SDPA-Flash computes
+softmax_lse internally. bench_mma_headline.py compares db_full forward()+L
+against SDPA-Flash with 10 paired repetitions.
 """
 import torch
 import torch.nn.functional as F
@@ -19,7 +19,7 @@ mod_addr = load(name="flash_attn_mma_db_addr", sources=["cuda/flash_attn_mma_db_
 mod_full = load(name="flash_attn_mma_db_full", sources=["cuda/flash_attn_mma_db_full.cu"],
                 extra_cuda_cflags=FLAGS, verbose=False)
 
-# stale-.so guard: always show exactly which binaries this run measured
+# Log loaded binaries to identify stale builds.
 for _m in (mod_db, mod_addr, mod_full):
     print(f"so: {_m.__file__}")
 

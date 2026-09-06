@@ -1,11 +1,10 @@
 """
-Final MMA benchmark with variance control.
+MMA and double-buffered MMA benchmark against SDPA-Flash.
 
 Protocol:
   - clock burn-in before any measurement
-  - per config: 5 reps of (mma, mma-db, sdpa-flash), measurement ORDER
-    ROTATED each rep so DVFS drift hits every implementation in every
-    position instead of biasing whichever always ran last
+  - per config: 5 reps of (mma, mma-db, sdpa-flash), with measurement order
+    rotated each rep to distribute clock drift across implementations
   - CUDA-event timing, per-rep average over `iters` launches
   - report median and (min..max) spread across reps
   - note: mma forward_only returns O only but still computes L internally,
@@ -22,7 +21,7 @@ mod = load(name="flash_attn_mma", sources=["cuda/flash_attn_mma.cu"],
 mod_db = load(name="flash_attn_mma_db", sources=["cuda/flash_attn_mma_db.cu"],
               extra_cuda_cflags=FLAGS, verbose=False)
 
-# stale-.so guard: always show exactly which binaries this run measured
+# Log loaded binaries to identify stale builds.
 for _m in (mod, mod_db):
     print(f"so: {_m.__file__}")
 

@@ -1,6 +1,6 @@
 """
 Layout validation for mma.sync.m16n8k16 + ldmatrix on real hardware.
-Run BEFORE trusting any mma kernel result. All three probes must PASS.
+Checks QK, PV, register reuse, and FP16-accumulate QK layouts.
 """
 import torch
 from torch.utils.cpp_extension import load
@@ -57,7 +57,7 @@ def main():
     ok &= ok4
 
     print("=" * 60)
-    print("ALL LAYOUT PROBES PASSED" if ok else "LAYOUT PROBE FAILURE — DO NOT BUILD mma ON THIS")
+    print("ALL LAYOUT PROBES PASSED" if ok else "LAYOUT PROBE FAILURE")
     return 0 if ok else 1
 
 

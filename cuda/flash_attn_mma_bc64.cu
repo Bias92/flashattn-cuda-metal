@@ -5,8 +5,7 @@
 // BC 32 -> 64. Halves the KV-loop iteration count (and thus barriers and
 // per-tile softmax passes) at the cost of ~2x S/P register state
 // (s[8][4] + pf[4][4]) and 2x shared memory (2 stages x 18.4KB = 36.9KB,
-// which caps occupancy at 2 blocks/SM). Experiment: math-throttle-bound
-// kernel may or may not profit. Measure, don't assume.
+// which caps occupancy at 2 blocks/SM).
 // ============================================================
 #include <torch/extension.h>
 #include <ATen/cuda/CUDAContext.h>
@@ -18,7 +17,7 @@
 
 constexpr int HD = 64;
 constexpr int BR = 64;
-constexpr int BC = 64;      // <-- the experiment
+constexpr int BC = 64;      // K/V rows per tile
 constexpr int PAD = 8;
 constexpr int NWARPS = BR / 16;
 

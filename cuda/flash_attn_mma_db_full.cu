@@ -10,9 +10,6 @@
 //   - epilogue: unguarded O/L stores
 // The guarded (FULL_TILES=false) path is byte-for-byte the db_addr logic,
 // so non-multiple-of-tile N (33, 63, 127, 4095, ...) behaves identically.
-//
-// Success bar: correctness identical, spill 0, REG <= 102,
-// N=4096 1-3% over db_addr.
 // ============================================================
 #include <torch/extension.h>
 #include <ATen/cuda/CUDAContext.h>

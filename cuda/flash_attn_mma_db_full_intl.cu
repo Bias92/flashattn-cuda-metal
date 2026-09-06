@@ -10,9 +10,6 @@
 // so slice-1's exp2f/pack scalar work executes while slice-0's HMMAs are
 // in flight, and the reduction shuffles overlap slice-1's HMMAs.
 // Scalar op ORDER per element is unchanged -> bit-identical results.
-//
-// Kill conditions (from review): full+L REG > 102, LOCAL > 0, or
-// 10-run paired median improvement < 1% vs db_full.
 // ============================================================
 #include <torch/extension.h>
 #include <ATen/cuda/CUDAContext.h>

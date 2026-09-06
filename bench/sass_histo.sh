@@ -1,8 +1,8 @@
 #!/bin/bash
 # SASS instruction histogram + HMMA rhythm check.
 # Usage: sass_histo.sh [module-substring]   (default: mma_db, excludes _addr)
-# NOTE: histogram covers the WHOLE .so (both WRITE_L instantiations) --
-# use for direction, not as precise per-kernel paper numbers.
+# The histogram covers the whole .so, including both WRITE_L instantiations.
+# Counts are not isolated to a single kernel.
 set -e
 PAT="${1:-mma_db/}"
 SO=$(find /root/.cache/torch_extensions -path "*$PAT*" -name "*.so" | head -1)

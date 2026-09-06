@@ -1,7 +1,7 @@
 """
-Paired 10-rep: db_full (fp32-acc QK) vs fp16acc ablation. forward()+L both.
-NOT comparable to SDPA headline (different accumulation precision) — the
-db_full-vs-fp16acc delta is the paper number ("what does fp32-acc cost?").
+Paired 10-rep comparison of FP32 and FP16 QK accumulation.
+Both db_full and fp16acc use forward()+L. The measured delta includes
+the precision change in QK accumulation.
 """
 import torch
 from torch.utils.cpp_extension import load

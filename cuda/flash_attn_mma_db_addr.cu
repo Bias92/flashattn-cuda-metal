@@ -14,9 +14,6 @@
 //   3. ldmatrix operands = cur_base + (lane offset precomputed once)
 //      + compile-time tile/slice constants, so ptxas folds them into
 //      LDSM immediate offsets instead of rebuilding IMAD/LEA chains.
-//
-// Success bar (from review): correctness identical, spill 0, REG <= 102,
-// measurable win vs db at N=4096.
 // ============================================================
 #include <torch/extension.h>
 #include <ATen/cuda/CUDAContext.h>

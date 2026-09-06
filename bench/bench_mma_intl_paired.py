@@ -1,9 +1,9 @@
 """
-Paired 10-rep benchmark: db_full vs db_full_intl (kill-condition gate).
+Paired 10-rep benchmark: db_full vs db_full_intl.
 
 Per rep, the two implementations run back-to-back with alternating order,
-and the improvement is computed PER REP (paired), then the median of the
-10 paired improvements decides:  median < 1%  ->  interleave is REJECTED.
+and the improvement is computed for that pair. The summary uses a 1%
+median improvement threshold for the KEEP/REJECT label.
 """
 import torch
 import torch.nn.functional as F

@@ -4,8 +4,7 @@ Usage:
   python3 bench/profile_mma_ncu_once.py mma 1024
   python3 bench/profile_mma_ncu_once.py db_full 1024
 
-Run ncu with --profile-from-start off so warmup and tensor initialization do
-not pollute the report.
+Use ncu --profile-from-start off to exclude warmup and tensor initialization.
 """
 import sys
 
