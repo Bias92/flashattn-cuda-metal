@@ -1,17 +1,17 @@
 # flashattn-cuda
 
-FlashAttention forward kernels written from scratch in CUDA.
+CUDA implementations of FlashAttention forward.
 The current forward kernel uses `mma.sync` and online softmax on an RTX 4060 Ti.
 
 Forward kernel used in the benchmark below:
 
 ```text
-cuda/flash_attn_mma_db_full.cu
+cuda/attention_forward.cu
 ```
 
 Forward latency compared with [PyTorch SDPA](https://docs.pytorch.org/docs/stable/generated/torch.nn.functional.scaled_dot_product_attention.html), using its `FLASH_ATTENTION` backend:
 
-| N | db_full, +L | PyTorch SDPA-Flash | gap |
+| N | Custom CUDA, +L | PyTorch Flash | gap |
 |---:|---:|---:|---:|
 | 1024 | 0.0620 ms | 0.0584 ms | +5.3% |
 | 2048 | 0.2221 ms | 0.2182 ms | +1.3% |
@@ -19,7 +19,7 @@ Forward latency compared with [PyTorch SDPA](https://docs.pytorch.org/docs/stabl
 
 Tested on RTX 4060 Ti, CUDA 12.8, PyTorch 2.10.0+cu128, B=1, H=8, D=64,
 FP16 input, FP32 accumulate, non-causal forward. The numbers above are 10-run
-paired medians from `bench/bench_mma_headline.py`.
+paired medians from `bench/compare_pytorch.py`.
 The script calls `torch.nn.functional.scaled_dot_product_attention` inside
 `sdpa_kernel(SDPBackend.FLASH_ATTENTION)`.
 
@@ -29,6 +29,8 @@ The script calls `torch.nn.functional.scaled_dot_product_attention` inside
 
 ## Implementation History
 
+These are revisions of this project's own kernel.
+
 | Stage | What changed |
 |---|---|
 | FP32 baseline | plain tiled FlashAttention forward |
@@ -36,7 +38,7 @@ The script calls `torch.nn.functional.scaled_dot_product_attention` inside
 | mma | direct `mma.sync`, register softmax, no shared S/P round trip |
 | mma-db | K/V `cp.async` double buffer |
 | db_addr | removed repeated integer address calculations |
-| db_full | full-tile fast path for common benchmark sizes |
+| Custom CUDA | full-tile fast path for common benchmark sizes |
 
 At `N=4096`, forward latency decreased from about 3.2 ms to about 0.873 ms.
 
@@ -46,10 +48,10 @@ At `N=4096`, forward latency decreased from about 3.2 ms to about 0.873 ms.
 
 ## Nsight Compute Snapshot
 
-Nsight Compute profiles of `mma` and `db_full` at `N=4096`, using one launch
+Nsight Compute profiles of the earlier `mma` kernel and Custom CUDA at `N=4096`, using one launch
 per kernel. The latency benchmark above uses CUDA events and paired runs.
 
-| Metric | mma before | db_full after |
+| Metric | mma before | Custom CUDA after |
 |---|---:|---:|
 | Duration | 1.38 ms | 0.987 ms |
 | Compute throughput | 35.18% | 43.32% |
@@ -60,10 +62,10 @@ The full Nsight Compute reports, text exports, and original uncropped UI
 captures are kept under `docs/profiling/ncu/` and `docs/profiling/ncu_sections/`.
 Archived reports and screenshots retain their original kernel names.
 
-The following FP32 and `db_full` profiles use different shapes and dtypes.
+The following FP32 and Custom CUDA profiles use different shapes and dtypes.
 Their durations are not directly comparable.
 
-| Metric | old FP32 kernel screenshot | current db_full report |
+| Metric | old FP32 kernel screenshot | Custom CUDA report |
 |---|---:|---:|
 | Shape | N=1024, FP32 | N=4096, FP16 input / FP32 accumulate |
 | Duration | 1.14 ms | 0.989 ms |
@@ -106,8 +108,8 @@ that comparison.
 
 ## Optimization Experiments
 
-The table includes `db_full(+L)` and experimental variants. Only `db_full(+L)`
-is used in the SDPA comparison above.
+The table includes Custom CUDA (+L) and experimental variants. Only Custom CUDA (+L)
+is used in the PyTorch Flash comparison above.
 
 | Attempt | Result | Status |
 |---|---|---|
@@ -116,7 +118,7 @@ is used in the SDPA comparison above.
 | mma | direct `mma.sync`, register softmax, no shared S/P round trip | kept in chain |
 | mma-db | added two-stage K/V `cp.async` | kept in chain |
 | db_addr | removed repeated shared/global address calculations and reduced SASS integer instructions | kept in chain |
-| db_full | removed full-tile predicates for N divisible by the tile size | benchmark kernel |
+| Custom CUDA | removed full-tile predicates for N divisible by the tile size | benchmark kernel |
 | fp16-acc QK | about 21-24% faster with FP16 QK accumulation, but loses accuracy on larger logits | ablation only |
 | BC=64 tile | correct, but shared memory footprint cut residency too much | rejected |
 | softmax/PV source interleave | correct and nearly bit-identical, but slower in paired runs | rejected |
@@ -138,6 +140,16 @@ Earlier FP32 and WMMA experiments:
 
 ## Files
 
+Main files:
+
+| File | Purpose |
+|---|---|
+| `cuda/attention_forward.cu` | Custom CUDA kernel |
+| `bench/compare_pytorch.py` | Custom CUDA (+L) vs PyTorch Flash |
+| `tests/test_attention_forward.py` | Custom CUDA correctness tests |
+
+Earlier implementations and experiments:
+
 | File | Notes |
 |---|---|
 | `cuda/flash_attn_kernel.cu` | FP32 baseline |
@@ -146,11 +158,9 @@ Earlier FP32 and WMMA experiments:
 | `cuda/flash_attn_mma.cu` | direct `mma.sync` version |
 | `cuda/flash_attn_mma_db.cu` | adds `cp.async` double buffering |
 | `cuda/flash_attn_mma_db_addr.cu` | cuts address generation overhead |
-| `cuda/flash_attn_mma_db_full.cu` | benchmark kernel |
 | `cuda/flash_attn_mma_bc64.cu` | negative ablation |
 | `cuda/flash_attn_mma_db_full_intl.cu` | negative ablation |
 | `cuda/flash_attn_mma_fp16acc.cu` | FP16 QK accumulation experiment |
-| `bench/bench_mma_headline.py` | db_full(+L) vs SDPA comparison |
 
 ## Correctness
 
@@ -159,7 +169,7 @@ The mma line is checked against a half-cast PyTorch reference.
 | Check | Result |
 |---|---|
 | `tests/test_mma_probe.py` | 3/3 layout probes pass |
-| `tests/test_mma_db_full.py` | 19/19 correctness configs pass |
+| `tests/test_attention_forward.py` | 19/19 correctness configs pass |
 | non-aligned N | included |
 | direct FP16 input | included |
 | amplified-value stress cases | included |
@@ -179,8 +189,8 @@ Main checks:
 
 ```bash
 python3 tests/test_mma_probe.py
-python3 tests/test_mma_db_full.py
-python3 bench/bench_mma_headline.py
+python3 tests/test_attention_forward.py
+python3 bench/compare_pytorch.py
 ```
 
 For the older FP32 kernel, `python3 bench/bench_forward.py` compares against

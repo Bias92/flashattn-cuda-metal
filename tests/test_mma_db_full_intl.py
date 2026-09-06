@@ -1,6 +1,6 @@
-"""MMA db_full_intl (softmax/PV interleave): correctness vs half-cast FP32 reference.
+"""MMA interleave (softmax/PV interleave): correctness vs half-cast FP32 reference.
 
-Also cross-checks bit-identity against db_full (the interleave only reorders
+Also cross-checks bit-identity against custom (the interleave only reorders
 ISSUE order; per-element scalar op order is unchanged, so outputs should be
 bitwise equal — reported per config, hard-checked at the end).
 """
@@ -11,8 +11,8 @@ FLAGS = ["-O3", "--use_fast_math", "-gencode=arch=compute_89,code=sm_89"]
 mod = load(name="flash_attn_mma_db_full_intl",
            sources=["cuda/flash_attn_mma_db_full_intl.cu"],
            extra_cuda_cflags=FLAGS, verbose=False)
-mod_full = load(name="flash_attn_mma_db_full",
-                sources=["cuda/flash_attn_mma_db_full.cu"],
+mod_full = load(name="attention_forward_cuda",
+                sources=["cuda/attention_forward.cu"],
                 extra_cuda_cflags=FLAGS, verbose=False)
 print(f"so: {mod.__file__}")
 print(f"so: {mod_full.__file__}")
@@ -59,7 +59,7 @@ def test_config(B, H, N, D, device="cuda", dtype=torch.float32, amp=1.0):
 
 def main():
     print("=" * 96)
-    print("MMA db_full_intl (softmax/PV interleave) Correctness Test")
+    print("MMA interleave (softmax/PV interleave) Correctness Test")
     print("=" * 96)
     configs = [
         (1, 1, 64, 64), (1, 1, 128, 64), (2, 4, 256, 64), (2, 8, 512, 64),
@@ -86,7 +86,7 @@ def main():
     total = len(configs) + len(extras)
 
     print("=" * 96)
-    print(f"Result: {passed}/{total} passed | bitwise == db_full: {bit_all}")
+    print(f"Result: {passed}/{total} passed | bitwise == custom: {bit_all}")
     return 0 if passed == total else 1
 
 

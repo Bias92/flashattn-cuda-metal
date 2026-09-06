@@ -1,13 +1,13 @@
 """
 Paired 10-rep comparison of FP32 and FP16 QK accumulation.
-Both db_full and fp16acc use forward()+L. The measured delta includes
+Both custom and fp16acc use forward()+L. The measured delta includes
 the precision change in QK accumulation.
 """
 import torch
 from torch.utils.cpp_extension import load
 
 FLAGS = ["-O3", "--use_fast_math", "-gencode=arch=compute_89,code=sm_89"]
-mod_full = load(name="flash_attn_mma_db_full", sources=["cuda/flash_attn_mma_db_full.cu"],
+mod_full = load(name="attention_forward_cuda", sources=["cuda/attention_forward.cu"],
                 extra_cuda_cflags=FLAGS, verbose=False)
 mod_a = load(name="flash_attn_mma_fp16acc", sources=["cuda/flash_attn_mma_fp16acc.cu"],
              extra_cuda_cflags=FLAGS, verbose=False)
@@ -41,7 +41,7 @@ def main():
     B, H, D = 1, 8, 64
     torch.manual_seed(42)
     print("=" * 100)
-    print(f"db_full (fp32-acc) vs fp16acc ablation — {REPS} paired reps, forward()+L")
+    print(f"custom (fp32-acc) vs fp16acc ablation — {REPS} paired reps, forward()+L")
     print(f"GPU: {torch.cuda.get_device_name(0)}")
     print("=" * 100)
 

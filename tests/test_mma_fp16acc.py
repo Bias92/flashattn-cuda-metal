@@ -1,7 +1,7 @@
 """FP16-accumulate QK accuracy across input scales.
 
 Reports O/L error against the FP32 reference from half-cast inputs and
-db_full (FP32 accumulation). Only amp=1 configurations affect the exit
+custom (FP32 accumulation). Only amp=1 configurations affect the exit
 status. The amp>=4 configurations report errors without pass/fail checks.
 """
 import torch
@@ -10,7 +10,7 @@ from torch.utils.cpp_extension import load
 FLAGS = ["-O3", "--use_fast_math", "-gencode=arch=compute_89,code=sm_89"]
 mod = load(name="flash_attn_mma_fp16acc", sources=["cuda/flash_attn_mma_fp16acc.cu"],
            extra_cuda_cflags=FLAGS, verbose=False)
-mod_full = load(name="flash_attn_mma_db_full", sources=["cuda/flash_attn_mma_db_full.cu"],
+mod_full = load(name="attention_forward_cuda", sources=["cuda/attention_forward.cu"],
                 extra_cuda_cflags=FLAGS, verbose=False)
 print(f"so: {mod.__file__}")
 print(f"so: {mod_full.__file__}")
@@ -49,7 +49,7 @@ def run_config(B, H, N, D, amp=1.0, gate=True, device="cuda"):
         status = "INFO"
 
     print(f"[{status}] N={N:>5} amp={amp:>4g}  |  vs fp32-ref: O={O_diff:.3e} L={L_diff:.3e}"
-          f"  |  vs db_full(f32acc): O={O_vs_f32acc:.3e} L={L_vs_f32acc:.3e}")
+          f"  |  vs custom(f32acc): O={O_vs_f32acc:.3e} L={L_vs_f32acc:.3e}")
     return ok
 
 

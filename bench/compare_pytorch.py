@@ -1,9 +1,9 @@
 """
-Paired benchmark: db_full forward()+L vs PyTorch SDPA-Flash, 10 reps.
+Paired benchmark: Custom CUDA forward()+L vs PyTorch Flash, 10 reps.
 
 After clock warmup, both implementations run back-to-back with alternating
-order. The result is the median of 10 per-rep latency gaps. db_full returns
-O and L; SDPA-Flash also computes softmax_lse internally.
+order. The result is the median of 10 per-rep latency gaps. Custom CUDA returns
+O and L; PyTorch Flash also computes softmax_lse internally.
 """
 import torch
 import torch.nn.functional as F
@@ -11,7 +11,7 @@ from torch.nn.attention import sdpa_kernel, SDPBackend
 from torch.utils.cpp_extension import load
 
 FLAGS = ["-O3", "--use_fast_math", "-gencode=arch=compute_89,code=sm_89"]
-mod = load(name="flash_attn_mma_db_full", sources=["cuda/flash_attn_mma_db_full.cu"],
+mod = load(name="attention_forward_cuda", sources=["cuda/attention_forward.cu"],
            extra_cuda_cflags=FLAGS, verbose=False)
 print(f"so: {mod.__file__}")
 
@@ -42,7 +42,7 @@ def main():
     B, H, D = 1, 8, 64
     torch.manual_seed(42)
     print("=" * 100)
-    print(f"db_full(+L) vs SDPA-Flash — {REPS} paired reps, "
+    print(f"Custom CUDA (+L) vs PyTorch Flash — {REPS} paired reps, "
           f"B={B} H={H} D={D} FP16 non-causal")
     print(f"GPU: {torch.cuda.get_device_name(0)}  torch {torch.__version__}")
     print("=" * 100)
@@ -77,7 +77,7 @@ def main():
             t_sdpa.append(s)
             gaps.append((o / s - 1.0) * 100.0)
 
-        print(f"N={N:>5}: ours {med(t_ours):.4f}ms  sdpa {med(t_sdpa):.4f}ms  "
+        print(f"N={N:>5}: Custom CUDA {med(t_ours):.4f}ms  PyTorch Flash {med(t_sdpa):.4f}ms  "
               f"| paired median gap {med(gaps):+.2f}%  "
               f"(per-rep: {', '.join(f'{g:+.1f}' for g in gaps)})")
 

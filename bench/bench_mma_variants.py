@@ -1,9 +1,9 @@
 """
-Variant comparison: mma-db(+L) vs db_addr(+L / O-only) vs db_full(+L / O-only)
+Variant comparison: mma-db(+L) vs db_addr(+L / O-only) vs custom(+L / O-only)
 vs SDPA-Flash. Order rotated per rep.
 
-The O-only db_addr and db_full paths skip L computation. SDPA-Flash computes
-softmax_lse internally. bench_mma_headline.py compares db_full forward()+L
+The O-only db_addr and custom paths skip L computation. SDPA-Flash computes
+softmax_lse internally. compare_pytorch.py compares custom forward()+L
 against SDPA-Flash with 10 paired repetitions.
 """
 import torch
@@ -16,7 +16,7 @@ mod_db = load(name="flash_attn_mma_db", sources=["cuda/flash_attn_mma_db.cu"],
               extra_cuda_cflags=FLAGS, verbose=False)
 mod_addr = load(name="flash_attn_mma_db_addr", sources=["cuda/flash_attn_mma_db_addr.cu"],
                 extra_cuda_cflags=FLAGS, verbose=False)
-mod_full = load(name="flash_attn_mma_db_full", sources=["cuda/flash_attn_mma_db_full.cu"],
+mod_full = load(name="attention_forward_cuda", sources=["cuda/attention_forward.cu"],
                 extra_cuda_cflags=FLAGS, verbose=False)
 
 # Log loaded binaries to identify stale builds.

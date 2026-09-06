@@ -2,7 +2,7 @@
 
 Usage:
   python3 bench/profile_mma_ncu_once.py mma 1024
-  python3 bench/profile_mma_ncu_once.py db_full 1024
+  python3 bench/profile_mma_ncu_once.py custom 1024
 
 Use ncu --profile-from-start off to exclude warmup and tensor initialization.
 """
@@ -23,10 +23,10 @@ def load_variant(name):
             extra_cuda_cflags=FLAGS,
             verbose=False,
         )
-    if name == "db_full":
+    if name == "custom":
         return load(
-            name="flash_attn_mma_db_full",
-            sources=["cuda/flash_attn_mma_db_full.cu"],
+            name="attention_forward_cuda",
+            sources=["cuda/attention_forward.cu"],
             extra_cuda_cflags=FLAGS,
             verbose=False,
         )
@@ -34,7 +34,7 @@ def load_variant(name):
 
 
 def main():
-    variant = sys.argv[1] if len(sys.argv) > 1 else "db_full"
+    variant = sys.argv[1] if len(sys.argv) > 1 else "custom"
     n = int(sys.argv[2]) if len(sys.argv) > 2 else 1024
     mod = load_variant(variant)
     print(f"variant={variant}")

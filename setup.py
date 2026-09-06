@@ -64,10 +64,10 @@ setup(
                 ],
             },
         ),
-        # db_addr + FULL_TILES specialization (current best)
+        # Custom CUDA kernel used by bench/compare_pytorch.py
         CUDAExtension(
-            name="flash_attn_mma_db_full",
-            sources=["cuda/flash_attn_mma_db_full.cu"],
+            name="attention_forward_cuda",
+            sources=["cuda/attention_forward.cu"],
             extra_compile_args={
                 "nvcc": [
                     "-O3",

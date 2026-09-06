@@ -1,4 +1,4 @@
-"""MMA db_full (FULL_TILES specialization): correctness vs half-cast FP32 reference.
+"""Custom CUDA (FULL_TILES specialization): correctness vs half-cast FP32 reference.
 
 Covers BOTH dispatch paths:
   - full   (N % 64 == 0): N = 64, 128, 1024, 2048, 4096
@@ -8,8 +8,8 @@ import torch
 from torch.utils.cpp_extension import load
 
 mod = load(
-    name="flash_attn_mma_db_full",
-    sources=["cuda/flash_attn_mma_db_full.cu"],
+    name="attention_forward_cuda",
+    sources=["cuda/attention_forward.cu"],
     extra_cuda_cflags=["-O3", "--use_fast_math", "-gencode=arch=compute_89,code=sm_89"],
     verbose=False,
 )
@@ -53,7 +53,7 @@ def test_config(B, H, N, D, device="cuda", dtype=torch.float32, amp=1.0):
 
 def main():
     print("=" * 90)
-    print("MMA db_full (FULL_TILES specialization) Correctness Test")
+    print("Custom CUDA (FULL_TILES specialization) Correctness Test")
     print("=" * 90)
     configs = [
         # full path

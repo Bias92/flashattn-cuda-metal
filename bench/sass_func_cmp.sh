@@ -1,7 +1,7 @@
 #!/bin/bash
-# Per-function ISETP/SEL/IMAD counts: db_addr vs db_full (FULL_TILES=true fn).
+# Per-function ISETP/SEL/IMAD counts: db_addr vs custom (FULL_TILES=true fn).
 set -e
-for MOD in db_addr db_full; do
+for MOD in flash_attn_mma_db_addr attention_forward_cuda; do
   SO=$(find /root/.cache/torch_extensions -path "*$MOD/*" -name "*.so" | head -1)
   echo "== $MOD ($SO) =="
   /usr/local/cuda-12.8/bin/cuobjdump -sass "$SO" 2>/dev/null \

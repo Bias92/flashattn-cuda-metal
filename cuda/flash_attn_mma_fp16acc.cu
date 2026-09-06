@@ -1,14 +1,14 @@
 // ============================================================
 // flash_attn_mma_fp16acc.cu -- ABLATION: fp16-accumulate QK^T
 //
-// Identical to flash_attn_mma_db_full.cu except the QK^T mma uses
+// Identical to attention_forward.cu except the QK^T mma uses
 // m16n8k16.f16.f16.f16.f16 (fp16 accumulator, 2x tensor issue rate on
 // consumer Ada) instead of f32 accumulate. S is unpacked to fp32 right
 // after the mma chain; softmax and the PV mma (fp32 accumulate) are
 // unchanged. Layout of the f16 C fragment validated by
 // mma_probe.probe_qk_f16acc on sm_89.
 //
-// Unlike db_full and SDPA-Flash, QK accumulation uses fp16 here.
+// Unlike custom and SDPA-Flash, QK accumulation uses fp16 here.
 // Rounding error grows with logit magnitude: fp16 ulp at |s|~40 is
 // ~0.03; at amp=16-scale logits, S error reaches O(1).
 // ============================================================

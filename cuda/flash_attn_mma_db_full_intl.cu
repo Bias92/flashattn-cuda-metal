@@ -1,7 +1,7 @@
 // ============================================================
-// flash_attn_mma_db_full_intl.cu -- db_full + softmax/PV interleave
+// flash_attn_mma_db_full_intl.cu -- custom + softmax/PV interleave
 //
-// Identical math/layout/cp.async structure to flash_attn_mma_db_full.cu.
+// Identical math/layout/cp.async structure to attention_forward.cu.
 // ONLY the issue order inside the KV iteration changes:
 //   before: [exp+pack ALL P slices] -> [rescale O] -> [ALL PV mmas]
 //   after:  [rescale O] ->
@@ -412,6 +412,6 @@ torch::Tensor mma_db_full_intl_forward_only(torch::Tensor Q, torch::Tensor K, to
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-    m.def("forward", &mma_db_full_intl_forward, "MMA db_full + softmax/PV interleave: returns O half, L float");
-    m.def("forward_only", &mma_db_full_intl_forward_only, "MMA db_full + softmax/PV interleave, true O-only");
+    m.def("forward", &mma_db_full_intl_forward, "Custom CUDA + softmax/PV interleave: returns O half, L float");
+    m.def("forward_only", &mma_db_full_intl_forward_only, "Custom CUDA + softmax/PV interleave, true O-only");
 }

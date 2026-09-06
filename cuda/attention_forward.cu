@@ -1,5 +1,5 @@
 // ============================================================
-// flash_attn_mma_db_full.cu -- db_addr + FULL_TILES specialization
+// attention_forward.cu -- Custom CUDA attention forward
 //
 // Identical math/layout/cp.async/softmax to flash_attn_mma_db_addr.cu.
 // Adds a FULL_TILES template path selected on the host when
@@ -83,7 +83,7 @@ __device__ __forceinline__ void cp_async_wait() {
 // ============================================================
 template <int D, bool WRITE_L, bool FULL_TILES>
 __global__ void __launch_bounds__(NWARPS * 32)
-mma_db_full_fwd_kernel(
+attention_fwd_kernel(
     const half* __restrict__ Q,
     const half* __restrict__ K,
     const half* __restrict__ V,
@@ -343,7 +343,7 @@ mma_db_full_fwd_kernel(
 // ============================================================
 // Host launchers
 // ============================================================
-static std::pair<torch::Tensor, torch::Tensor> mma_db_full_forward_impl(
+static std::pair<torch::Tensor, torch::Tensor> attention_forward_impl(
     torch::Tensor Q, torch::Tensor K, torch::Tensor V, bool want_L)
 {
     TORCH_CHECK(Q.is_cuda() && K.is_cuda() && V.is_cuda(), "Q/K/V must be CUDA tensors");
@@ -387,11 +387,11 @@ static std::pair<torch::Tensor, torch::Tensor> mma_db_full_forward_impl(
     };
     const bool full_tiles = (N % BR == 0) && (N % BC == 0);
     if (want_L) {
-        if (full_tiles) launch(mma_db_full_fwd_kernel<HD, true, true>);
-        else            launch(mma_db_full_fwd_kernel<HD, true, false>);
+        if (full_tiles) launch(attention_fwd_kernel<HD, true, true>);
+        else            launch(attention_fwd_kernel<HD, true, false>);
     } else {
-        if (full_tiles) launch(mma_db_full_fwd_kernel<HD, false, true>);
-        else            launch(mma_db_full_fwd_kernel<HD, false, false>);
+        if (full_tiles) launch(attention_fwd_kernel<HD, false, true>);
+        else            launch(attention_fwd_kernel<HD, false, false>);
     }
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 
@@ -399,17 +399,17 @@ static std::pair<torch::Tensor, torch::Tensor> mma_db_full_forward_impl(
             want_L ? L.reshape({B, H, N}) : torch::Tensor()};
 }
 
-std::vector<torch::Tensor> mma_db_full_forward(torch::Tensor Q, torch::Tensor K, torch::Tensor V) {
-    auto [O, L] = mma_db_full_forward_impl(Q, K, V, /*want_L=*/true);
+std::vector<torch::Tensor> attention_forward(torch::Tensor Q, torch::Tensor K, torch::Tensor V) {
+    auto [O, L] = attention_forward_impl(Q, K, V, /*want_L=*/true);
     return {O, L};
 }
 
-torch::Tensor mma_db_full_forward_only(torch::Tensor Q, torch::Tensor K, torch::Tensor V) {
-    auto [O, L] = mma_db_full_forward_impl(Q, K, V, /*want_L=*/false);
+torch::Tensor attention_forward_only(torch::Tensor Q, torch::Tensor K, torch::Tensor V) {
+    auto [O, L] = attention_forward_impl(Q, K, V, /*want_L=*/false);
     return O;
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-    m.def("forward", &mma_db_full_forward, "MMA db_addr + FULL_TILES forward: returns O half, L float");
-    m.def("forward_only", &mma_db_full_forward_only, "MMA db_addr + FULL_TILES forward, true O-only");
+    m.def("forward", &attention_forward, "Custom CUDA forward: returns O half, L float");
+    m.def("forward_only", &attention_forward_only, "Custom CUDA forward, true O-only");
 }
