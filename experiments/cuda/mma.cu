@@ -1,7 +1,7 @@
 ﻿// ============================================================
-// flash_attn_mma.cu -- scratch FlashAttention forward using mma.sync
+// experiments/cuda/mma.cu -- scratch FlashAttention forward using mma.sync
 //
-// Design (all layout assumptions validated by cuda/mma_probe.cu on sm_89):
+// Design (all layout assumptions validated by experiments/cuda/layout_probe.cu on sm_89):
 //   - mma.sync.m16n8k16 for BOTH QK^T and PV (no WMMA API)
 //   - S, P, O live in registers; softmax entirely in registers
 //     (quad-lane shuffle reductions). No sS/sP shared round-trip.

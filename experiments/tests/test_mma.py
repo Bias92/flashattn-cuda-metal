@@ -2,12 +2,16 @@
 MMA (mma.sync) correctness test vs FP32 naive reference.
 Inputs are FP32 randn converted to half inside the module -> FP16 tolerances.
 """
+from pathlib import Path
+
 import torch
 from torch.utils.cpp_extension import load
 
+ROOT = Path(__file__).resolve().parents[2]
+
 mod = load(
-    name="flash_attn_mma",
-    sources=["cuda/flash_attn_mma.cu"],
+    name="attention_mma_cuda",
+    sources=[str(ROOT / "experiments/cuda/mma.cu")],
     extra_cuda_cflags=["-O3", "--use_fast_math", "-gencode=arch=compute_89,code=sm_89"],
     verbose=False,
 )

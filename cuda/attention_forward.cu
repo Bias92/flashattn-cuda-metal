@@ -1,7 +1,7 @@
 // ============================================================
 // attention_forward.cu -- Custom CUDA attention forward
 //
-// Identical math/layout/cp.async/softmax to flash_attn_mma_db_addr.cu.
+// Identical math/layout/cp.async/softmax to experiments/cuda/precomputed_addresses.cu.
 // Adds a FULL_TILES template path selected on the host when
 // (N % BR == 0) && (N % BC == 0):
 //   - issue_kv: unguarded cp.async (no g<N compare/select, src_size 16)

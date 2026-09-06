@@ -1,20 +1,23 @@
 """
-Paired 10-rep benchmark: custom vs interleave.
+Paired 10-rep benchmark: current kernel vs interleaving.
 
 Per rep, the two implementations run back-to-back with alternating order,
 and the improvement is computed for that pair. The summary uses a 1%
 median improvement threshold for the KEEP/REJECT label.
 """
+from pathlib import Path
+
 import torch
 import torch.nn.functional as F
 from torch.nn.attention import sdpa_kernel, SDPBackend
 from torch.utils.cpp_extension import load
 
+ROOT = Path(__file__).resolve().parents[2]
 FLAGS = ["-O3", "--use_fast_math", "-gencode=arch=compute_89,code=sm_89"]
-mod_full = load(name="attention_forward_cuda", sources=["cuda/attention_forward.cu"],
+mod_full = load(name="attention_forward_cuda", sources=[str(ROOT / "cuda/attention_forward.cu")],
                 extra_cuda_cflags=FLAGS, verbose=False)
-mod_intl = load(name="flash_attn_mma_db_full_intl",
-                sources=["cuda/flash_attn_mma_db_full_intl.cu"],
+mod_intl = load(name="attention_interleaved_cuda",
+                sources=[str(ROOT / "experiments/cuda/interleaved.cu")],
                 extra_cuda_cflags=FLAGS, verbose=False)
 for _m in (mod_full, mod_intl):
     print(f"so: {_m.__file__}")
@@ -46,7 +49,7 @@ def main():
     B, H, D = 1, 8, 64
     torch.manual_seed(42)
     print("=" * 100)
-    print(f"custom vs interleave paired ({REPS} reps, forward()+L both sides)")
+    print(f"current kernel vs interleaving paired ({REPS} reps, forward()+L both sides)")
     print(f"GPU: {torch.cuda.get_device_name(0)}")
     print("=" * 100)
 
@@ -81,8 +84,8 @@ def main():
 
         imp = med(paired)
         verdict = "KEEP (>= 1%)" if imp >= 1.0 else "REJECT (< 1%)"
-        print(f"N={N}: full {med(t_full):.4f}ms  intl {med(t_intl):.4f}ms  "
-              f"sdpa {t_sdpa:.4f}ms | paired median improvement {imp:+.2f}% -> {verdict}")
+        print(f"N={N}: current {med(t_full):.4f}ms  interleaving {med(t_intl):.4f}ms  "
+              f"PyTorch Flash {t_sdpa:.4f}ms | paired median improvement {imp:+.2f}% -> {verdict}")
         print(f"       paired per-rep %: {[f'{p:+.2f}' for p in paired]}")
 
     print("=" * 100)

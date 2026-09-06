@@ -5,13 +5,16 @@ After clock warmup, both implementations run back-to-back with alternating
 order. The result is the median of 10 per-rep latency gaps. Custom CUDA returns
 O and L; PyTorch Flash also computes softmax_lse internally.
 """
+from pathlib import Path
+
 import torch
 import torch.nn.functional as F
 from torch.nn.attention import sdpa_kernel, SDPBackend
 from torch.utils.cpp_extension import load
 
+ROOT = Path(__file__).resolve().parents[1]
 FLAGS = ["-O3", "--use_fast_math", "-gencode=arch=compute_89,code=sm_89"]
-mod = load(name="attention_forward_cuda", sources=["cuda/attention_forward.cu"],
+mod = load(name="attention_forward_cuda", sources=[str(ROOT / "cuda/attention_forward.cu")],
            extra_cuda_cflags=FLAGS, verbose=False)
 print(f"so: {mod.__file__}")
 

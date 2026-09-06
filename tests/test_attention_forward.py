@@ -4,12 +4,16 @@ Covers BOTH dispatch paths:
   - full   (N % 64 == 0): N = 64, 128, 1024, 2048, 4096
   - guarded (otherwise):  N = 1, 2, 7, 31, 33, 63, 127, 4095
 """
+from pathlib import Path
+
 import torch
 from torch.utils.cpp_extension import load
 
+ROOT = Path(__file__).resolve().parents[1]
+
 mod = load(
     name="attention_forward_cuda",
-    sources=["cuda/attention_forward.cu"],
+    sources=[str(ROOT / "cuda/attention_forward.cu")],
     extra_cuda_cflags=["-O3", "--use_fast_math", "-gencode=arch=compute_89,code=sm_89"],
     verbose=False,
 )

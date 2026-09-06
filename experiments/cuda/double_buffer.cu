@@ -1,7 +1,7 @@
 ﻿// ============================================================
-// flash_attn_mma_db.cu -- mma + cp.async 2-stage K/V double buffering
+// experiments/cuda/double_buffer.cu -- mma + cp.async 2-stage K/V double buffering
 //
-// Identical math/layout to flash_attn_mma.cu (probe-validated).
+// Identical math/layout to experiments/cuda/mma.cu (probe-validated).
 // Change from the single-buffer kernel: K/V tiles are fetched with cp.async.cg into
 // alternating shared buffers, so the next tile's global loads overlap
 // the current tile's tensor-core compute. Q staging reuses buffer 1

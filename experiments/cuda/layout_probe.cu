@@ -1,5 +1,5 @@
 // ============================================================
-// mma_probe.cu — layout validation for mma.sync.m16n8k16 + ldmatrix
+// experiments/cuda/layout_probe.cu — layout validation for mma.sync.m16n8k16 + ldmatrix
 //
 // Tests operand and accumulator register layouts on the GPU:
 //   1. A operand:  ldmatrix.x4 on row-major Q-style storage

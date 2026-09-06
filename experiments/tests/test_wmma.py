@@ -3,8 +3,19 @@ FlashAttention WMMA Correctness Test
 ======================================
 Tests WMMA Tensor Core forward against naive reference.
 """
+from pathlib import Path
+
 import torch
-import flash_attn_wmma
+from torch.utils.cpp_extension import load
+
+ROOT = Path(__file__).resolve().parents[2]
+
+flash_attn_wmma = load(
+    name="attention_wmma_cuda",
+    sources=[str(ROOT / "experiments/cuda/wmma.cu")],
+    extra_cuda_cflags=["-O3", "--use_fast_math", "-gencode=arch=compute_89,code=sm_89"],
+    verbose=False,
+)
 
 def naive_attention(Q, K, V):
     D = Q.shape[-1]

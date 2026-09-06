@@ -2,14 +2,18 @@
 Layout validation for mma.sync.m16n8k16 + ldmatrix on real hardware.
 Checks QK, PV, register reuse, and FP16-accumulate QK layouts.
 """
+from pathlib import Path
+
 import torch
 from torch.utils.cpp_extension import load
+
+ROOT = Path(__file__).resolve().parents[2]
 
 torch.manual_seed(0)
 
 mod = load(
-    name="mma_probe",
-    sources=["cuda/mma_probe.cu"],
+    name="mma_layout_probe_cuda",
+    sources=[str(ROOT / "experiments/cuda/layout_probe.cu")],
     extra_cuda_cflags=["-O2", "-gencode=arch=compute_89,code=sm_89"],
     verbose=False,
 )

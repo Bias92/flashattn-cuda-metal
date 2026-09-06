@@ -1,15 +1,15 @@
 #!/bin/bash
 # SASS instruction histogram + HMMA rhythm check.
-# Usage: sass_histo.sh [module-substring]   (default: mma_db, excludes _addr)
+# Usage: sass_histogram.sh [module-name] (default: attention_double_buffer_cuda)
 # The histogram covers the whole .so, including both WRITE_L instantiations.
 # Counts are not isolated to a single kernel.
 set -e
-PAT="${1:-mma_db/}"
-SO=$(find /root/.cache/torch_extensions -path "*$PAT*" -name "*.so" | head -1)
+MOD="${1:-attention_double_buffer_cuda}"
+SO=$(find /root/.cache/torch_extensions -path "*/$MOD/*" -name "*.so" | head -1)
 echo "SO: $SO"
 /usr/local/cuda-12.8/bin/cuobjdump -sass "$SO" > /tmp/db.sass
 
-echo "== opcode histogram (WRITE_L=false kernel region and beyond, whole file) =="
+echo "== opcode histogram (whole file, all kernel specializations) =="
 grep -oE '\*/ +[A-Z@!][A-Z0-9@!.]+' /tmp/db.sass \
   | sed -E 's|\*/ +||; s/^@!?[A-Z0-9]+ +//; s/\..*$//' \
   | sort | uniq -c | sort -rn | head -20

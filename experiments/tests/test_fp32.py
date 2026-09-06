@@ -3,18 +3,23 @@ Test: FlashAttention forward vs naive attention.
 Verifies numerical correctness across multiple configs.
 """
 
-import torch
+from pathlib import Path
 import sys
-sys.path.insert(0, ".")
 
-from ref.naive_attn import naive_attention
+import torch
+from torch.utils.cpp_extension import load
 
-try:
-    import flash_attn_cuda
-except ImportError:
-    print("Build first: python setup.py install")
-    print("  or: pip install -e .")
-    sys.exit(1)
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+
+from experiments.reference import naive_attention
+
+flash_attn_cuda = load(
+    name="attention_fp32_cuda",
+    sources=[str(ROOT / "experiments/cuda/fp32.cu")],
+    extra_cuda_cflags=["-O3", "--use_fast_math", "-gencode=arch=compute_89,code=sm_89"],
+    verbose=False,
+)
 
 
 def test_forward(B, H, N, D, atol=1e-3, rtol=1e-3):

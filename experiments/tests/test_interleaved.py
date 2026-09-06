@@ -4,15 +4,19 @@ Also cross-checks bit-identity against custom (the interleave only reorders
 ISSUE order; per-element scalar op order is unchanged, so outputs should be
 bitwise equal — reported per config, hard-checked at the end).
 """
+from pathlib import Path
+
 import torch
 from torch.utils.cpp_extension import load
 
+ROOT = Path(__file__).resolve().parents[2]
+
 FLAGS = ["-O3", "--use_fast_math", "-gencode=arch=compute_89,code=sm_89"]
-mod = load(name="flash_attn_mma_db_full_intl",
-           sources=["cuda/flash_attn_mma_db_full_intl.cu"],
+mod = load(name="attention_interleaved_cuda",
+           sources=[str(ROOT / "experiments/cuda/interleaved.cu")],
            extra_cuda_cflags=FLAGS, verbose=False)
 mod_full = load(name="attention_forward_cuda",
-                sources=["cuda/attention_forward.cu"],
+                sources=[str(ROOT / "cuda/attention_forward.cu")],
                 extra_cuda_cflags=FLAGS, verbose=False)
 print(f"so: {mod.__file__}")
 print(f"so: {mod_full.__file__}")

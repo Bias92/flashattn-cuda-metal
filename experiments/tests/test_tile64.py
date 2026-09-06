@@ -1,10 +1,14 @@
-"""MMA db+addr (address strength reduction): correctness vs half-cast FP32 reference."""
+"""MMA BC=64 variant: correctness vs half-cast FP32 reference."""
+from pathlib import Path
+
 import torch
 from torch.utils.cpp_extension import load
 
+ROOT = Path(__file__).resolve().parents[2]
+
 mod = load(
-    name="flash_attn_mma_db_addr",
-    sources=["cuda/flash_attn_mma_db_addr.cu"],
+    name="attention_tile64_cuda",
+    sources=[str(ROOT / "experiments/cuda/tile64.cu")],
     extra_cuda_cflags=["-O3", "--use_fast_math", "-gencode=arch=compute_89,code=sm_89"],
     verbose=False,
 )
@@ -28,6 +32,8 @@ def test_config(B, H, N, D, device="cuda", dtype=torch.float32, amp=1.0):
     O_ref, L_ref = naive_attention(Qh, Kh, Vh)
     O_mma, L_mma = mod.forward(Q, K, V)
     O_mma = O_mma.float()
+
+    # also exercise the true-O-only path (must match forward's O bitwise)
     O_only = mod.forward_only(Q, K, V).float()
     oo_same = torch.equal(O_only, O_mma)
 
@@ -45,12 +51,13 @@ def test_config(B, H, N, D, device="cuda", dtype=torch.float32, amp=1.0):
 
 def main():
     print("=" * 80)
-    print("MMA db+addr (address strength reduction) Correctness Test")
+    print("MMA BC=64 Correctness Test")
     print("=" * 80)
     configs = [
         (1, 1, 1, 64), (1, 1, 2, 64), (1, 1, 7, 64), (1, 1, 15, 64), (1, 1, 31, 64),
         (1, 1, 32, 64), (1, 1, 33, 64), (1, 1, 63, 64), (1, 1, 64, 64),
-        (1, 1, 127, 64), (1, 1, 128, 64), (2, 4, 256, 64), (2, 8, 512, 64),
+        (1, 1, 65, 64), (1, 1, 127, 64), (1, 1, 128, 64),   # BC=64 tile boundaries
+        (2, 4, 256, 64), (2, 8, 512, 64),
         (1, 1, 1024, 64), (1, 1, 2048, 64), (1, 1, 4095, 64), (1, 1, 4096, 64),
     ]
     passed = sum(test_config(*c) for c in configs)

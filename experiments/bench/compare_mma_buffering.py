@@ -10,15 +10,18 @@ Protocol:
   - note: mma forward_only returns O only but still computes L internally,
     matching SDPA-Flash which also computes softmax_lse unconditionally
 """
+from pathlib import Path
+
 import torch
 import torch.nn.functional as F
 from torch.nn.attention import sdpa_kernel, SDPBackend
 from torch.utils.cpp_extension import load
 
+ROOT = Path(__file__).resolve().parents[2]
 FLAGS = ["-O3", "--use_fast_math", "-gencode=arch=compute_89,code=sm_89"]
-mod = load(name="flash_attn_mma", sources=["cuda/flash_attn_mma.cu"],
+mod = load(name="attention_mma_cuda", sources=[str(ROOT / "experiments/cuda/mma.cu")],
            extra_cuda_cflags=FLAGS, verbose=False)
-mod_db = load(name="flash_attn_mma_db", sources=["cuda/flash_attn_mma_db.cu"],
+mod_db = load(name="attention_double_buffer_cuda", sources=[str(ROOT / "experiments/cuda/double_buffer.cu")],
               extra_cuda_cflags=FLAGS, verbose=False)
 
 # Log loaded binaries to identify stale builds.
@@ -51,7 +54,7 @@ def main():
     B, H, D = 1, 8, 64
     torch.manual_seed(42)
     print("=" * 100)
-    print(f"MMA final benchmark (B={B}, H={H}, D={D}, FP16, non-causal) — "
+    print(f"MMA vs double-buffered MMA (B={B}, H={H}, D={D}, FP16, non-causal) — "
           f"median of {REPS} interleaved reps, spread in parens")
     print(f"GPU: {torch.cuda.get_device_name(0)}  torch {torch.__version__}")
     print("=" * 100)
@@ -61,7 +64,7 @@ def main():
         mod_db.forward_only(Qb, Qb, Qb)
     torch.cuda.synchronize()
 
-    hdr = f"{'N':>6} | {'mma (ms)':>22} | {'mma-db (ms)':>22} | {'sdpa-flash (ms)':>22} | {'db/sdpa':>7}"
+    hdr = f"{'N':>6} | {'MMA (ms)':>22} | {'double-buffered (ms)':>22} | {'PyTorch Flash (ms)':>22} | {'buffered/PyTorch':>16}"
     print(hdr)
     print("-" * 100)
     for N in [128, 256, 512, 1024, 2048, 4096]:

@@ -1,22 +1,26 @@
 """
-Variant comparison: mma-db(+L) vs db_addr(+L / O-only) vs custom(+L / O-only)
+Variant comparison: double buffer(+L) vs precomputed addresses(+L / O-only)
+vs current kernel(+L / O-only)
 vs SDPA-Flash. Order rotated per rep.
 
-The O-only db_addr and custom paths skip L computation. SDPA-Flash computes
-softmax_lse internally. compare_pytorch.py compares custom forward()+L
+The O-only precomputed-addresses and current paths skip L computation. SDPA-Flash computes
+softmax_lse internally. bench/compare_pytorch.py compares current forward()+L
 against SDPA-Flash with 10 paired repetitions.
 """
+from pathlib import Path
+
 import torch
 import torch.nn.functional as F
 from torch.nn.attention import sdpa_kernel, SDPBackend
 from torch.utils.cpp_extension import load
 
+ROOT = Path(__file__).resolve().parents[2]
 FLAGS = ["-O3", "--use_fast_math", "-gencode=arch=compute_89,code=sm_89"]
-mod_db = load(name="flash_attn_mma_db", sources=["cuda/flash_attn_mma_db.cu"],
+mod_db = load(name="attention_double_buffer_cuda", sources=[str(ROOT / "experiments/cuda/double_buffer.cu")],
               extra_cuda_cflags=FLAGS, verbose=False)
-mod_addr = load(name="flash_attn_mma_db_addr", sources=["cuda/flash_attn_mma_db_addr.cu"],
+mod_addr = load(name="attention_precomputed_addresses_cuda", sources=[str(ROOT / "experiments/cuda/precomputed_addresses.cu")],
                 extra_cuda_cflags=FLAGS, verbose=False)
-mod_full = load(name="attention_forward_cuda", sources=["cuda/attention_forward.cu"],
+mod_full = load(name="attention_forward_cuda", sources=[str(ROOT / "cuda/attention_forward.cu")],
                 extra_cuda_cflags=FLAGS, verbose=False)
 
 # Log loaded binaries to identify stale builds.
@@ -57,9 +61,9 @@ def main():
         mod_db.forward_only(Qb, Qb, Qb)
     torch.cuda.synchronize()
 
-    print(f"{'N':>6} | {'db+L (ms)':>10} | {'addr+L':>9} | {'addr O-o':>9} | "
-          f"{'full+L':>9} | {'full O-o':>9} | {'sdpa':>8} | {'fullL/sdpa':>9} | {'fullL/addrL':>9}")
-    print("-" * 110)
+    print(f"{'N':>6} | {'double buffer+L (ms)':>20} | {'precomputed+L':>14} | {'precomputed O-only':>18} | "
+          f"{'current+L':>10} | {'current O-only':>14} | {'PyTorch Flash':>14} | {'current/PyTorch':>16} | {'current/precomputed':>20}")
+    print("-" * 170)
     for N in [1024, 2048, 4096]:
         Q = torch.randn(B, H, N, D, device="cuda", dtype=torch.float16)
         K = torch.randn(B, H, N, D, device="cuda", dtype=torch.float16)
@@ -102,9 +106,9 @@ def main():
                 times[k].append(runners[k]())
 
         m = {k: med(v) for k, v in times.items()}
-        print(f"{N:>6} | {m['dbL']:>10.4f} | {m['addrL']:>9.4f} | {m['addr']:>9.4f} | "
-              f"{m['fullL']:>9.4f} | {m['full']:>9.4f} | {m['sdpa']:>8.4f} | "
-              f"{m['fullL'] / m['sdpa']:>9.2f}x | {m['fullL'] / m['addrL']:>9.2f}x")
+        print(f"{N:>6} | {m['dbL']:>20.4f} | {m['addrL']:>14.4f} | {m['addr']:>18.4f} | "
+              f"{m['fullL']:>10.4f} | {m['full']:>14.4f} | {m['sdpa']:>14.4f} | "
+              f"{m['fullL'] / m['sdpa']:>16.2f}x | {m['fullL'] / m['addrL']:>20.2f}x")
 
     print("=" * 110)
 

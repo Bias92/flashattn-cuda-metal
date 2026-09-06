@@ -1,15 +1,16 @@
 // ============================================================
-// flash_attn_mma_db_full_intl.cu -- custom + softmax/PV interleave
+// experiments/cuda/fp16_accumulation.cu -- ABLATION: fp16-accumulate QK^T
 //
-// Identical math/layout/cp.async structure to attention_forward.cu.
-// ONLY the issue order inside the KV iteration changes:
-//   before: [exp+pack ALL P slices] -> [rescale O] -> [ALL PV mmas]
-//   after:  [rescale O] ->
-//           per PV k-slice ks: [exp+pack slice ks] -> [PV mmas slice ks]
-//           -> [row-sum shuffles + l/m update]  (overlaps last HMMAs)
-// so slice-1's exp2f/pack scalar work executes while slice-0's HMMAs are
-// in flight, and the reduction shuffles overlap slice-1's HMMAs.
-// Scalar op ORDER per element is unchanged -> bit-identical results.
+// Identical to attention_forward.cu except the QK^T mma uses
+// m16n8k16.f16.f16.f16.f16 (fp16 accumulator, 2x tensor issue rate on
+// consumer Ada) instead of f32 accumulate. S is unpacked to fp32 right
+// after the mma chain; softmax and the PV mma (fp32 accumulate) are
+// unchanged. Layout of the f16 C fragment validated by
+// mma_layout_probe_cuda.probe_qk_f16acc on sm_89.
+//
+// Unlike custom and SDPA-Flash, QK accumulation uses fp16 here.
+// Rounding error grows with logit magnitude: fp16 ulp at |s|~40 is
+// ~0.03; at amp=16-scale logits, S error reaches O(1).
 // ============================================================
 #include <torch/extension.h>
 #include <ATen/cuda/CUDAContext.h>
@@ -59,6 +60,21 @@ __device__ __forceinline__ void mma_m16n8k16(
         : "r"(a0), "r"(a1), "r"(a2), "r"(a3), "r"(b0), "r"(b1));
 }
 
+// fp16-accumulate QK mma: D/C are 2 b32 regs = 4 halves.
+// c0 = half2 for row l/4 (cols 2(l%4), +1), c1 = half2 for row l/4+8.
+// Layout validated by mma_layout_probe_cuda.probe_qk_f16acc.
+__device__ __forceinline__ void mma_m16n8k16_f16acc(
+    uint32_t& c0, uint32_t& c1,
+    uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3,
+    uint32_t b0, uint32_t b1)
+{
+    asm volatile(
+        "mma.sync.aligned.m16n8k16.row.col.f16.f16.f16.f16 "
+        "{%0,%1}, {%2,%3,%4,%5}, {%6,%7}, {%0,%1};\n"
+        : "+r"(c0), "+r"(c1)
+        : "r"(a0), "r"(a1), "r"(a2), "r"(a3), "r"(b0), "r"(b1));
+}
+
 __device__ __forceinline__ uint32_t pack_half2(float x, float y) {
     half2 h = __floats2half2_rn(x, y);
     return *reinterpret_cast<uint32_t*>(&h);
@@ -83,7 +99,7 @@ __device__ __forceinline__ void cp_async_wait() {
 // ============================================================
 template <int D, bool WRITE_L, bool FULL_TILES>
 __global__ void __launch_bounds__(NWARPS * 32)
-mma_db_full_intl_fwd_kernel(
+mma_fp16acc_fwd_kernel(
     const half* __restrict__ Q,
     const half* __restrict__ K,
     const half* __restrict__ V,
@@ -215,22 +231,26 @@ mma_db_full_intl_fwd_kernel(
         const uint32_t qk_base = cur_base + qk_lane_base;
         const uint32_t pv_base = cur_base + pv_lane_base;
 
-        // ---- S = Q K^T ----
+        // ---- S = Q K^T (FP16 ACCUMULATE, then unpack to fp32) ----
         float s[NTILES_S][4];
         #pragma unroll
         for (int t = 0; t < NTILES_S; t++) {
-            s[t][0] = s[t][1] = s[t][2] = s[t][3] = 0.0f;
+            uint32_t sh0 = 0, sh1 = 0;
             #pragma unroll
             for (int ks = 0; ks < KSLICES; ks++) {
                 uint32_t b0, b1;
                 ldmatrix_x2(b0, b1,
                     qk_base + (uint32_t)(t * 8) * ROW_BYTES
                             + (uint32_t)(ks * 16) * sizeof(half));
-                mma_m16n8k16(s[t][0], s[t][1], s[t][2], s[t][3],
-                             qf[ks][0], qf[ks][1], qf[ks][2], qf[ks][3], b0, b1);
+                mma_m16n8k16_f16acc(sh0, sh1,
+                                    qf[ks][0], qf[ks][1], qf[ks][2], qf[ks][3], b0, b1);
             }
-            #pragma unroll
-            for (int j = 0; j < 4; j++) s[t][j] *= scale_log2;
+            float2 f01 = __half22float2(*reinterpret_cast<half2*>(&sh0));
+            float2 f23 = __half22float2(*reinterpret_cast<half2*>(&sh1));
+            s[t][0] = f01.x * scale_log2;
+            s[t][1] = f01.y * scale_log2;
+            s[t][2] = f23.x * scale_log2;
+            s[t][3] = f23.y * scale_log2;
         }
 
         if constexpr (!FULL_TILES) {
@@ -260,8 +280,35 @@ mma_db_full_intl_fwd_kernel(
         float alpha_lo = exp2f(m_lo - mn_lo);
         float alpha_hi = exp2f(m_hi - mn_hi);
 
-        // ---- Interleaved softmax/PV ----
-        // Rescale O first: PV mmas accumulate into it.
+        float rs_lo = 0.0f, rs_hi = 0.0f;
+        #pragma unroll
+        for (int t = 0; t < NTILES_S; t++) {
+            s[t][0] = exp2f(s[t][0] - mn_lo);
+            s[t][1] = exp2f(s[t][1] - mn_lo);
+            s[t][2] = exp2f(s[t][2] - mn_hi);
+            s[t][3] = exp2f(s[t][3] - mn_hi);
+            rs_lo += s[t][0] + s[t][1];
+            rs_hi += s[t][2] + s[t][3];
+        }
+        rs_lo += __shfl_xor_sync(0xffffffff, rs_lo, 1);
+        rs_lo += __shfl_xor_sync(0xffffffff, rs_lo, 2);
+        rs_hi += __shfl_xor_sync(0xffffffff, rs_hi, 1);
+        rs_hi += __shfl_xor_sync(0xffffffff, rs_hi, 2);
+
+        l_lo = l_lo * alpha_lo + rs_lo;
+        l_hi = l_hi * alpha_hi + rs_hi;
+        m_lo = mn_lo;
+        m_hi = mn_hi;
+
+        uint32_t pf[KSLICES_PV][4];
+        #pragma unroll
+        for (int ks = 0; ks < KSLICES_PV; ks++) {
+            pf[ks][0] = pack_half2(s[2 * ks][0],     s[2 * ks][1]);
+            pf[ks][1] = pack_half2(s[2 * ks][2],     s[2 * ks][3]);
+            pf[ks][2] = pack_half2(s[2 * ks + 1][0], s[2 * ks + 1][1]);
+            pf[ks][3] = pack_half2(s[2 * ks + 1][2], s[2 * ks + 1][3]);
+        }
+
         #pragma unroll
         for (int t = 0; t < NTILES_O; t++) {
             o_acc[t][0] *= alpha_lo;
@@ -269,47 +316,18 @@ mma_db_full_intl_fwd_kernel(
             o_acc[t][2] *= alpha_hi;
             o_acc[t][3] *= alpha_hi;
         }
-
-        // Per PV k-slice: exp+pack that slice, then issue its 8 HMMAs.
-        // Slice ks+1's exp2f/pack runs while slice ks's HMMAs are in flight.
-        float rs_lo = 0.0f, rs_hi = 0.0f;
         #pragma unroll
-        for (int ks = 0; ks < KSLICES_PV; ks++) {
-            uint32_t pf[4];
+        for (int t = 0; t < NTILES_O; t++) {
             #pragma unroll
-            for (int tt = 2 * ks; tt <= 2 * ks + 1; tt++) {
-                s[tt][0] = exp2f(s[tt][0] - mn_lo);
-                s[tt][1] = exp2f(s[tt][1] - mn_lo);
-                s[tt][2] = exp2f(s[tt][2] - mn_hi);
-                s[tt][3] = exp2f(s[tt][3] - mn_hi);
-                rs_lo += s[tt][0] + s[tt][1];
-                rs_hi += s[tt][2] + s[tt][3];
-            }
-            pf[0] = pack_half2(s[2 * ks][0],     s[2 * ks][1]);
-            pf[1] = pack_half2(s[2 * ks][2],     s[2 * ks][3]);
-            pf[2] = pack_half2(s[2 * ks + 1][0], s[2 * ks + 1][1]);
-            pf[3] = pack_half2(s[2 * ks + 1][2], s[2 * ks + 1][3]);
-
-            #pragma unroll
-            for (int t = 0; t < NTILES_O; t++) {
+            for (int ks = 0; ks < KSLICES_PV; ks++) {
                 uint32_t b0, b1;
                 ldmatrix_x2_trans(b0, b1,
                     pv_base + (uint32_t)(ks * 16) * ROW_BYTES
                             + (uint32_t)(t * 8) * sizeof(half));
                 mma_m16n8k16(o_acc[t][0], o_acc[t][1], o_acc[t][2], o_acc[t][3],
-                             pf[0], pf[1], pf[2], pf[3], b0, b1);
+                             pf[ks][0], pf[ks][1], pf[ks][2], pf[ks][3], b0, b1);
             }
         }
-
-        // Deferred reductions/state update: overlaps the last HMMA slice.
-        rs_lo += __shfl_xor_sync(0xffffffff, rs_lo, 1);
-        rs_lo += __shfl_xor_sync(0xffffffff, rs_lo, 2);
-        rs_hi += __shfl_xor_sync(0xffffffff, rs_hi, 1);
-        rs_hi += __shfl_xor_sync(0xffffffff, rs_hi, 2);
-        l_lo = l_lo * alpha_lo + rs_lo;
-        l_hi = l_hi * alpha_hi + rs_hi;
-        m_lo = mn_lo;
-        m_hi = mn_hi;
         __syncthreads();
 
         uint32_t tmp = cur_base; cur_base = next_base; next_base = tmp;
@@ -345,7 +363,7 @@ mma_db_full_intl_fwd_kernel(
 // ============================================================
 // Host launchers
 // ============================================================
-static std::pair<torch::Tensor, torch::Tensor> mma_db_full_intl_forward_impl(
+static std::pair<torch::Tensor, torch::Tensor> mma_fp16acc_forward_impl(
     torch::Tensor Q, torch::Tensor K, torch::Tensor V, bool want_L)
 {
     TORCH_CHECK(Q.is_cuda() && K.is_cuda() && V.is_cuda(), "Q/K/V must be CUDA tensors");
@@ -389,11 +407,11 @@ static std::pair<torch::Tensor, torch::Tensor> mma_db_full_intl_forward_impl(
     };
     const bool full_tiles = (N % BR == 0) && (N % BC == 0);
     if (want_L) {
-        if (full_tiles) launch(mma_db_full_intl_fwd_kernel<HD, true, true>);
-        else            launch(mma_db_full_intl_fwd_kernel<HD, true, false>);
+        if (full_tiles) launch(mma_fp16acc_fwd_kernel<HD, true, true>);
+        else            launch(mma_fp16acc_fwd_kernel<HD, true, false>);
     } else {
-        if (full_tiles) launch(mma_db_full_intl_fwd_kernel<HD, false, true>);
-        else            launch(mma_db_full_intl_fwd_kernel<HD, false, false>);
+        if (full_tiles) launch(mma_fp16acc_fwd_kernel<HD, false, true>);
+        else            launch(mma_fp16acc_fwd_kernel<HD, false, false>);
     }
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 
@@ -401,17 +419,17 @@ static std::pair<torch::Tensor, torch::Tensor> mma_db_full_intl_forward_impl(
             want_L ? L.reshape({B, H, N}) : torch::Tensor()};
 }
 
-std::vector<torch::Tensor> mma_db_full_intl_forward(torch::Tensor Q, torch::Tensor K, torch::Tensor V) {
-    auto [O, L] = mma_db_full_intl_forward_impl(Q, K, V, /*want_L=*/true);
+std::vector<torch::Tensor> mma_fp16acc_forward(torch::Tensor Q, torch::Tensor K, torch::Tensor V) {
+    auto [O, L] = mma_fp16acc_forward_impl(Q, K, V, /*want_L=*/true);
     return {O, L};
 }
 
-torch::Tensor mma_db_full_intl_forward_only(torch::Tensor Q, torch::Tensor K, torch::Tensor V) {
-    auto [O, L] = mma_db_full_intl_forward_impl(Q, K, V, /*want_L=*/false);
+torch::Tensor mma_fp16acc_forward_only(torch::Tensor Q, torch::Tensor K, torch::Tensor V) {
+    auto [O, L] = mma_fp16acc_forward_impl(Q, K, V, /*want_L=*/false);
     return O;
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-    m.def("forward", &mma_db_full_intl_forward, "Custom CUDA + softmax/PV interleave: returns O half, L float");
-    m.def("forward_only", &mma_db_full_intl_forward_only, "Custom CUDA + softmax/PV interleave, true O-only");
+    m.def("forward", &mma_fp16acc_forward, "ABLATION: fp16-accumulate QK forward (returns O half, L float)");
+    m.def("forward_only", &mma_fp16acc_forward_only, "ABLATION: fp16-accumulate QK forward, true O-only");
 }

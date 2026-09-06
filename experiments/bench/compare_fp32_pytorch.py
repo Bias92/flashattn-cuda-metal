@@ -3,18 +3,21 @@ Benchmark: FP32 FlashAttention vs PyTorch SDPA's math backend.
 Measures wall-clock time and peak GPU memory.
 """
 
+from pathlib import Path
+
 import torch
 import torch.nn.functional as F
 from torch.nn.attention import SDPBackend, sdpa_kernel
+from torch.utils.cpp_extension import load
 import time
-import sys
-sys.path.insert(0, ".")
 
-try:
-    import flash_attn_cuda
-except ImportError:
-    print("Build first: python setup.py install")
-    sys.exit(1)
+ROOT = Path(__file__).resolve().parents[2]
+attention_fp32_cuda = load(
+    name="attention_fp32_cuda",
+    sources=[str(ROOT / "experiments/cuda/fp32.cu")],
+    extra_cuda_cflags=["-O3", "--use_fast_math", "-gencode=arch=compute_89,code=sm_89"],
+    verbose=False,
+)
 
 
 def bench_fn(fn, *args, warmup=5, iters=20):
@@ -52,7 +55,7 @@ def run_benchmark(B, H, N, D):
         t_sdpa = bench_fn(lambda: F.scaled_dot_product_attention(
             Q, K, V, dropout_p=0.0, is_causal=False
         ))
-    t_flash = bench_fn(lambda: flash_attn_cuda.forward(Q, K, V))
+    t_flash = bench_fn(lambda: attention_fp32_cuda.forward(Q, K, V))
     speedup = t_sdpa / t_flash
 
     # Memory
@@ -62,11 +65,11 @@ def run_benchmark(B, H, N, D):
             Q, K, V, dropout_p=0.0, is_causal=False
         ))
     torch.cuda.empty_cache()
-    mem_flash = bench_memory(lambda: flash_attn_cuda.forward(Q, K, V))
+    mem_flash = bench_memory(lambda: attention_fp32_cuda.forward(Q, K, V))
     mem_ratio = mem_sdpa / mem_flash if mem_flash > 0 else float("inf")
 
     print(f"N={N:>5}  |  SDPA-MATH: {t_sdpa:>8.2f}ms  {mem_sdpa:>8.1f}MB  |  "
-          f"flash: {t_flash:>8.2f}ms  {mem_flash:>8.1f}MB  |  "
+          f"FP32 CUDA: {t_flash:>8.2f}ms  {mem_flash:>8.1f}MB  |  "
           f"speedup: {speedup:.2f}x  mem_save: {mem_ratio:.2f}x")
 
 

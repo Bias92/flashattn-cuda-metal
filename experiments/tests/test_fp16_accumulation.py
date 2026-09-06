@@ -4,13 +4,17 @@ Reports O/L error against the FP32 reference from half-cast inputs and
 custom (FP32 accumulation). Only amp=1 configurations affect the exit
 status. The amp>=4 configurations report errors without pass/fail checks.
 """
+from pathlib import Path
+
 import torch
 from torch.utils.cpp_extension import load
 
+ROOT = Path(__file__).resolve().parents[2]
+
 FLAGS = ["-O3", "--use_fast_math", "-gencode=arch=compute_89,code=sm_89"]
-mod = load(name="flash_attn_mma_fp16acc", sources=["cuda/flash_attn_mma_fp16acc.cu"],
+mod = load(name="attention_fp16_accumulation_cuda", sources=[str(ROOT / "experiments/cuda/fp16_accumulation.cu")],
            extra_cuda_cflags=FLAGS, verbose=False)
-mod_full = load(name="attention_forward_cuda", sources=["cuda/attention_forward.cu"],
+mod_full = load(name="attention_forward_cuda", sources=[str(ROOT / "cuda/attention_forward.cu")],
                 extra_cuda_cflags=FLAGS, verbose=False)
 print(f"so: {mod.__file__}")
 print(f"so: {mod_full.__file__}")
