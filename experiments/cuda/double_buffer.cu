@@ -1,13 +1,10 @@
 ﻿// ============================================================
 // experiments/cuda/double_buffer.cu -- mma + cp.async 2-stage K/V double buffering
 //
-// Identical math/layout to experiments/cuda/mma.cu (probe-validated).
-// Change from the single-buffer kernel: K/V tiles are fetched with cp.async.cg into
-// alternating shared buffers, so the next tile's global loads overlap
-// the current tile's tensor-core compute. Q staging reuses buffer 1
-// while the first K/V group is already in flight into buffer 0.
+// Prefetches the next K/V tile with cp.async.cg into an alternating shared buffer.
+// Q staging reuses buffer 1 while the first K/V group is in flight into buffer 0.
 //
-// Shared memory: 2 stages x (K+V) x 32 x 72 halves = 18KB.
+// Shared memory: 2 stages x (K+V) x 32 x 72 halves = 18 KiB.
 // PAD=8 keeps every 16B cp.async destination aligned (72*2 = 144 = 9*16).
 // ============================================================
 #include <torch/extension.h>
@@ -373,6 +370,5 @@ torch::Tensor mma_db_forward_only(torch::Tensor Q, torch::Tensor K, torch::Tenso
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("forward", &mma_db_forward, "MMA forward + cp.async double buffering: returns O half, L float");
     // WRITE_L=false skips logf, L stores and the host-side L allocation.
-    // SDPA-Flash also computes logsumexp; forward() includes that work.
     m.def("forward_only", &mma_db_forward_only, "MMA forward (cp.async), true O-only (no L compute/alloc)");
 }

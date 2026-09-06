@@ -1,15 +1,8 @@
 // ============================================================
 // experiments/cuda/interleaved.cu -- custom + softmax/PV interleave
 //
-// Identical math/layout/cp.async structure to attention_forward.cu.
-// ONLY the issue order inside the KV iteration changes:
-//   before: [exp+pack ALL P slices] -> [rescale O] -> [ALL PV mmas]
-//   after:  [rescale O] ->
-//           per PV k-slice ks: [exp+pack slice ks] -> [PV mmas slice ks]
-//           -> [row-sum shuffles + l/m update]  (overlaps last HMMAs)
-// so slice-1's exp2f/pack scalar work executes while slice-0's HMMAs are
-// in flight, and the reduction shuffles overlap slice-1's HMMAs.
-// Scalar op ORDER per element is unchanged -> bit-identical results.
+// Rescales O, then exponentiates and packs each P slice before its PV MMA calls.
+// Reduces row sums and updates softmax state after processing all slices.
 // ============================================================
 #include <torch/extension.h>
 #include <ATen/cuda/CUDAContext.h>
@@ -270,8 +263,7 @@ mma_db_full_intl_fwd_kernel(
             o_acc[t][3] *= alpha_hi;
         }
 
-        // Per PV k-slice: exp+pack that slice, then issue its 8 HMMAs.
-        // Slice ks+1's exp2f/pack runs while slice ks's HMMAs are in flight.
+        // Exponentiate and pack one P slice, then issue its PV MMA calls.
         float rs_lo = 0.0f, rs_hi = 0.0f;
         #pragma unroll
         for (int ks = 0; ks < KSLICES_PV; ks++) {
@@ -301,7 +293,7 @@ mma_db_full_intl_fwd_kernel(
             }
         }
 
-        // Deferred reductions/state update: overlaps the last HMMA slice.
+        // Reduce row sums and update softmax state.
         rs_lo += __shfl_xor_sync(0xffffffff, rs_lo, 1);
         rs_lo += __shfl_xor_sync(0xffffffff, rs_lo, 2);
         rs_hi += __shfl_xor_sync(0xffffffff, rs_hi, 1);

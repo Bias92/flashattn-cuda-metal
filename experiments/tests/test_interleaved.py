@@ -1,8 +1,7 @@
 """MMA interleave (softmax/PV interleave): correctness vs half-cast FP32 reference.
 
-Also cross-checks bit-identity against custom (the interleave only reorders
-ISSUE order; per-element scalar op order is unchanged, so outputs should be
-bitwise equal — reported per config, hard-checked at the end).
+Also reports bitwise equality with the current kernel. Exit status depends on
+reference tolerances and agreement between forward and forward_only outputs.
 """
 from pathlib import Path
 

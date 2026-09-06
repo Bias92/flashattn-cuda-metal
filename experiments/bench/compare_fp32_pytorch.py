@@ -35,12 +35,12 @@ def bench_fn(fn, *args, warmup=5, iters=20):
 
 
 def bench_memory(fn, *args):
-    """Measure peak GPU memory of a function call."""
+    """Peak allocated memory during the call, including input tensors, in MiB."""
     torch.cuda.reset_peak_memory_stats()
     torch.cuda.synchronize()
     fn(*args)
     torch.cuda.synchronize()
-    peak = torch.cuda.max_memory_allocated() / (1024 ** 2)  # MB
+    peak = torch.cuda.max_memory_allocated() / (1024 ** 2)  # MiB
     return peak
 
 
@@ -68,8 +68,8 @@ def run_benchmark(B, H, N, D):
     mem_flash = bench_memory(lambda: attention_fp32_cuda.forward(Q, K, V))
     mem_ratio = mem_sdpa / mem_flash if mem_flash > 0 else float("inf")
 
-    print(f"N={N:>5}  |  SDPA-MATH: {t_sdpa:>8.2f}ms  {mem_sdpa:>8.1f}MB  |  "
-          f"FP32 CUDA: {t_flash:>8.2f}ms  {mem_flash:>8.1f}MB  |  "
+    print(f"N={N:>5}  |  SDPA-MATH: {t_sdpa:>8.2f}ms  {mem_sdpa:>8.1f}MiB  |  "
+          f"FP32 CUDA: {t_flash:>8.2f}ms  {mem_flash:>8.1f}MiB  |  "
           f"speedup: {speedup:.2f}x  mem_save: {mem_ratio:.2f}x")
 
 

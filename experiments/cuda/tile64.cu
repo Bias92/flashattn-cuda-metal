@@ -1,11 +1,9 @@
 // ============================================================
 // experiments/cuda/tile64.cu -- mma-db variant with BC=64 KV tiles
 //
-// Identical math/structure to experiments/cuda/double_buffer.cu, single knob change:
-// BC 32 -> 64. Halves the KV-loop iteration count (and thus barriers and
-// per-tile softmax passes) at the cost of ~2x S/P register state
-// (s[8][4] + pf[4][4]) and 2x shared memory (2 stages x 18.4KB = 36.9KB,
-// which caps occupancy at 2 blocks/SM).
+// BC=64 gives ceil(N/64) K/V iterations.
+// S has 8 score fragments and P has 4 operand fragments per thread.
+// The two K/V stages occupy 36 KiB of shared memory.
 // ============================================================
 #include <torch/extension.h>
 #include <ATen/cuda/CUDAContext.h>

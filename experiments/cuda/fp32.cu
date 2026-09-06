@@ -11,7 +11,7 @@ constexpr int BC = 32;   // K/V column block size
 constexpr int HD = 64;   // head dimension (compile-time)
 
 // ============================================================
-// Forward Kernel (Algorithm 1)
+// FP32 tiled attention forward
 // ============================================================
 template <int B_r, int B_c, int D>
 __global__ void flash_attn_fwd_kernel(

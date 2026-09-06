@@ -1,19 +1,8 @@
 // ============================================================
 // experiments/cuda/precomputed_addresses.cu -- mma-db + address strength reduction
 //
-// Identical math/layout/softmax/cp.async pipeline to experiments/cuda/double_buffer.cu.
-// Only the ADDRESS GENERATION changes (SASS showed ~13 integer ops per
-// HMMA in the db kernel, dominated by per-iteration address recompute):
-//
-//   1. issue_kv: fixed 4-copy-per-thread form (K row r0, K row r1,
-//      V row r0, V row r1 at column cc), byte offsets into the stage
-//      buffer precomputed once outside the loop.
-//   2. Stage toggle = swap of two precomputed u32 shared base addresses.
-//      NO XOR on addresses: STAGE_BYTES = 9216 = 0x2400 is not a
-//      power-of-two stride and overlaps in-stage offset bits.
-//   3. ldmatrix operands = cur_base + (lane offset precomputed once)
-//      + compile-time tile/slice constants, so ptxas folds them into
-//      LDSM immediate offsets instead of rebuilding IMAD/LEA chains.
+// Precomputes per-thread copy offsets and per-lane ldmatrix offsets.
+// Swaps two shared-memory stage bases after each K/V tile.
 // ============================================================
 #include <torch/extension.h>
 #include <ATen/cuda/CUDAContext.h>

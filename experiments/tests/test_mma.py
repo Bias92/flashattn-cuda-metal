@@ -33,10 +33,7 @@ def test_config(B, H, N, D, device="cuda", dtype=torch.float32, amp=1.0):
     K = (torch.randn(B, H, N, D, device=device, dtype=torch.float32) * amp).to(dtype)
     V = (torch.randn(B, H, N, D, device=device, dtype=torch.float32) * amp).to(dtype)
 
-    # Reference from HALF-CAST inputs in fp32 math: isolates kernel error from
-    # the unavoidable fp16 input-cast error, so tolerances can be tight
-    # (atol 1e-2 would let a ~2% systematic kernel bug pass at large N).
-    # (.half() is a no-op for fp16 direct inputs.)
+    # Use the same FP16-rounded inputs as the kernel to exclude input-cast error.
     Qh, Kh, Vh = Q.half().float(), K.half().float(), V.half().float()
     O_ref, L_ref = naive_attention(Qh, Kh, Vh)
     O_mma, L_mma = mod.forward(Q, K, V)
@@ -45,8 +42,7 @@ def test_config(B, H, N, D, device="cuda", dtype=torch.float32, amp=1.0):
     O_diff = (O_mma - O_ref).abs().max().item()
     L_diff = (L_mma - L_ref).abs().max().item()
 
-    # amp>1 blows up |L| ~ amp^2; keep the absolute check on O (bounded by
-    # softmax) and rely on rtol for L in stress configs.
+    # O is a weighted average of V; scale its absolute tolerance with amp.
     O_pass = torch.allclose(O_mma, O_ref, atol=2e-3 * max(amp, 1.0), rtol=2e-3)
     L_pass = torch.allclose(L_mma, L_ref, atol=2e-3, rtol=1e-3)
     ok = O_pass and L_pass

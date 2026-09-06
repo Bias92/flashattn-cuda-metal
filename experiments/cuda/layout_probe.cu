@@ -5,10 +5,10 @@
 //   1. A operand:  ldmatrix.x4 on row-major Q-style storage
 //   2. B operand (QK):  ldmatrix.x2 (no trans) on K-style storage [n][k]
 //   3. B operand (PV):  ldmatrix.x2.trans on V-style storage [k][n]
-//   4. C accumulator -> A operand reuse (the FlashAttention register trick)
+//   4. C accumulator -> A operand reuse
 //   5. C store layout: c0,c1 -> (row=l/4, col=2(l%4),+1); c2,c3 -> row+8
 //
-// Each probe compares the mma output with a reference matrix.
+// Reference comparisons: experiments/tests/test_layout_probe.py.
 // ============================================================
 #include <torch/extension.h>
 #include <c10/cuda/CUDAException.h>
@@ -16,7 +16,7 @@
 #include <cuda_fp16.h>
 #include <cstdint>
 
-#define SMEM_STRIDE 24   // deliberately padded (16+8) to prove stride independence
+#define SMEM_STRIDE 24   // 16 elements + 8 padding
 
 __device__ __forceinline__ uint32_t smem_u32(const void* p) {
     return static_cast<uint32_t>(__cvta_generic_to_shared(p));
@@ -190,7 +190,7 @@ __global__ void probe_pv_kernel(const half* P, const half* V, float* out, int va
 }
 
 // ------------------------------------------------------------
-// Probe 3: the C->A register reuse chain (FlashAttention trick)
+// Probe 3: C->A register reuse chain
 //   S[16][16] = A @ Kfull^T   (two n8 C-tiles, Kfull [16][16] n-by-k)
 //   Sh = half(S) converted IN REGISTERS with the assumed C->A mapping:
 //     a0 = h2(c0,c1) of n-tile0, a1 = h2(c2,c3) of n-tile0,

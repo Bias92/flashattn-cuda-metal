@@ -61,7 +61,7 @@ __global__ void flash_attn_fwd_wmma_kernel(
     }
     __syncthreads();
 
-    // Load Q tile to shared memory — vectorized half2 (2x bandwidth)
+    // Load Q tile to shared memory using half2.
     {
         const int total_h2 = Br * D / 2;  // 16*64/2 = 512
         for (int i = lane; i < total_h2; i += 32) {

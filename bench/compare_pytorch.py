@@ -2,8 +2,7 @@
 Paired benchmark: Custom CUDA forward()+L vs PyTorch Flash, 10 reps.
 
 After clock warmup, both implementations run back-to-back with alternating
-order. The result is the median of 10 per-rep latency gaps. Custom CUDA returns
-O and L; PyTorch Flash also computes softmax_lse internally.
+order. The result is the median of 10 per-rep latency gaps. Custom CUDA returns O and L.
 """
 from pathlib import Path
 

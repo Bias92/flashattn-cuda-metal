@@ -73,7 +73,7 @@ def main():
             paired.append((f - a) / f * 100.0)
 
         print(f"N={N:>5}: current {med(t_f):.4f}ms  FP16 accumulation {med(t_a):.4f}ms  "
-              f"| paired median speedup {med(paired):+.2f}%")
+              f"| paired median latency reduction {med(paired):+.2f}%")
         print(f"        per-rep %: {', '.join(f'{p:+.1f}' for p in paired)}")
 
     print("=" * 100)

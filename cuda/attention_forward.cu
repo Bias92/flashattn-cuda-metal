@@ -1,15 +1,8 @@
 // ============================================================
 // attention_forward.cu -- Custom CUDA attention forward
 //
-// Identical math/layout/cp.async/softmax to experiments/cuda/precomputed_addresses.cu.
-// Adds a FULL_TILES template path selected on the host when
-// (N % BR == 0) && (N % BC == 0):
-//   - issue_kv: unguarded cp.async (no g<N compare/select, src_size 16)
-//   - Q staging: unguarded loads
-//   - tail column mask: compiled out
-//   - epilogue: unguarded O/L stores
-// The guarded (FULL_TILES=false) path is byte-for-byte the db_addr logic,
-// so non-multiple-of-tile N (33, 63, 127, 4095, ...) behaves identically.
+// Two-stage K/V copies with precomputed shared-memory addresses.
+// FULL_TILES removes load, mask, and store guards when N is divisible by BR and BC.
 // ============================================================
 #include <torch/extension.h>
 #include <ATen/cuda/CUDAContext.h>

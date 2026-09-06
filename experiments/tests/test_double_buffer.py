@@ -28,7 +28,7 @@ def test_config(B, H, N, D, device="cuda", dtype=torch.float32, amp=1.0):
     K = (torch.randn(B, H, N, D, device=device, dtype=torch.float32) * amp).to(dtype)
     V = (torch.randn(B, H, N, D, device=device, dtype=torch.float32) * amp).to(dtype)
 
-    # Half-cast reference: tight tolerances (see test_mma.py rationale)
+    # Match the kernel's FP16 input conversion before computing the reference.
     Qh, Kh, Vh = Q.half().float(), K.half().float(), V.half().float()
     O_ref, L_ref = naive_attention(Qh, Kh, Vh)
     O_mma, L_mma = mod.forward(Q, K, V)

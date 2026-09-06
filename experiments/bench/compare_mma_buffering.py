@@ -7,8 +7,7 @@ Protocol:
     rotated each rep to distribute clock drift across implementations
   - CUDA-event timing, per-rep average over `iters` launches
   - report median and (min..max) spread across reps
-  - note: mma forward_only returns O only but still computes L internally,
-    matching SDPA-Flash which also computes softmax_lse unconditionally
+  - mma forward_only still computes L; double-buffered forward_only skips L
 """
 from pathlib import Path
 
@@ -24,7 +23,6 @@ mod = load(name="attention_mma_cuda", sources=[str(ROOT / "experiments/cuda/mma.
 mod_db = load(name="attention_double_buffer_cuda", sources=[str(ROOT / "experiments/cuda/double_buffer.cu")],
               extra_cuda_cflags=FLAGS, verbose=False)
 
-# Log loaded binaries to identify stale builds.
 for _m in (mod, mod_db):
     print(f"so: {_m.__file__}")
 

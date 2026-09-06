@@ -56,7 +56,7 @@ def main():
     # Probe 4: f16-accumulate QK layout (looser tol: accumulation itself is fp16)
     got = mod.probe_qk_f16acc(A, K)
     diff = (got - ref_qk).abs().max().item()
-    ok4 = diff < 5e-2   # layout errors would be O(1); fp16-acc rounding is ~1e-2
+    ok4 = diff < 5e-2   # looser tolerance for FP16 accumulation
     print(f"[{'PASS' if ok4 else 'FAIL'}] {'QK f16-accumulate layout':<40s} max_diff={diff:.3e}")
     ok &= ok4
 

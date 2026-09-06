@@ -1,13 +1,15 @@
 ﻿// ============================================================
-// experiments/cuda/mma.cu -- scratch FlashAttention forward using mma.sync
+// experiments/cuda/mma.cu -- attention forward using mma.sync
 //
-// Design (all layout assumptions validated by experiments/cuda/layout_probe.cu on sm_89):
+// Layout probes: experiments/tests/test_layout_probe.py.
+//
+// Implementation:
 //   - mma.sync.m16n8k16 for BOTH QK^T and PV (no WMMA API)
 //   - S, P, O live in registers; softmax entirely in registers
 //     (quad-lane shuffle reductions). No sS/sP shared round-trip.
-//   - P feeds PV directly via the C->A fragment reuse trick.
+//   - P feeds PV through C->A fragment reuse.
 //   - Block = 4 warps, BR=64 Q rows (16 per warp), BC=32 KV rows.
-//   - Shared memory: one 9KB buffer, used once to stage Q for
+//   - Shared memory: one 9 KiB buffer, used once to stage Q for
 //     ldmatrix, then reused as the K/V tile buffer every iteration.
 //   - exp2f-based online softmax (scale folded into log2 domain).
 //   - 2 __syncthreads() per KV block.
@@ -233,7 +235,7 @@ mma_fwd_kernel(
         m_lo = mn_lo;
         m_hi = mn_hi;
 
-        // ---- Pack P into A-fragments (C->A register reuse, probe-validated) ----
+        // ---- Pack P into A-fragments (C->A register reuse) ----
         uint32_t pf[KSLICES_PV][4];
         #pragma unroll
         for (int ks = 0; ks < KSLICES_PV; ks++) {
@@ -347,8 +349,6 @@ torch::Tensor mma_forward_only(torch::Tensor Q, torch::Tensor K, torch::Tensor V
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("forward", &mma_forward, "MMA forward (mma.sync, register-resident softmax): returns O half, L float");
-    // NOTE: forward_only RETURNS O only, but L is still computed and written
-    // internally (same as SDPA-Flash, which also computes softmax_lse
-    // unconditionally). It is a return-value convenience, not a lighter kernel.
-    m.def("forward_only", &mma_forward_only, "MMA forward returning O only (L still computed internally, parity with SDPA)");
+    // forward_only returns O; L is still allocated, computed, and written.
+    m.def("forward_only", &mma_forward_only, "MMA forward returning O only (L still computed internally)");
 }

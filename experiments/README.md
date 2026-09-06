@@ -13,7 +13,7 @@ The current kernel is [attention_forward.cu](../cuda/attention_forward.cu).
 | [fp32.cu](cuda/fp32.cu) | Scalar FP32 tiled attention | [test_fp32.py](tests/test_fp32.py) |
 | [wmma.cu](cuda/wmma.cu) | WMMA matmuls, shared-memory score and probability tiles | [test_wmma.py](tests/test_wmma.py) |
 | [mma.cu](cuda/mma.cu) | Direct `mma.sync`, register softmax | [test_mma.py](tests/test_mma.py) |
-| [double_buffer.cu](cuda/double_buffer.cu) | Adds K/V `cp.async` double buffering and a true O-only path | [test_double_buffer.py](tests/test_double_buffer.py) |
+| [double_buffer.cu](cuda/double_buffer.cu) | Adds K/V `cp.async` double buffering and an O-only path | [test_double_buffer.py](tests/test_double_buffer.py) |
 | [precomputed_addresses.cu](cuda/precomputed_addresses.cu) | Hoists copy and matrix-load address calculations | [test_precomputed_addresses.py](tests/test_precomputed_addresses.py) |
 | [tile64.cu](cuda/tile64.cu) | 64-row K/V tile | [test_tile64.py](tests/test_tile64.py) |
 | [interleaved.cu](cuda/interleaved.cu) | Interleaves softmax and PV work | [test_interleaved.py](tests/test_interleaved.py) |
@@ -43,7 +43,6 @@ use the CUDA 12.8 paths from the original profiling environment.
 
 ## Recorded optimization history
 
-The following results were recorded before the directory cleanup.
 The current kernel adds full-tile specialization to the precomputed-addresses
 implementation. Old `fa3`/`db_full` labels in figures refer to these local revisions.
 
@@ -52,9 +51,6 @@ At `N=4096`, forward latency decreased from about 3.2 ms to about 0.873 ms.
 <p align="center">
   <img src="../docs/profiling/fa3_optimization_chain.png" width="720" alt="Optimization chain">
 </p>
-
-The table includes Custom CUDA (+L) and experimental variants. Only Custom CUDA (+L)
-is used in the main [PyTorch Flash comparison](../bench/compare_pytorch.py).
 
 | Attempt | Result | Status |
 |---|---|---|
@@ -65,7 +61,7 @@ is used in the main [PyTorch Flash comparison](../bench/compare_pytorch.py).
 | db_addr | removed repeated shared/global address calculations and reduced SASS integer instructions | kept in chain |
 | Custom CUDA | removed full-tile predicates for N divisible by the tile size | benchmark kernel |
 | fp16-acc QK | about 21-24% faster with FP16 QK accumulation, but loses accuracy on larger logits | ablation only |
-| BC=64 tile | correct, but shared memory footprint cut residency too much | rejected |
+| BC=64 tile | doubles K/V shared storage from 18 KiB to 36 KiB | rejected |
 | softmax/PV source interleave | correct and nearly bit-identical, but slower in paired runs | rejected |
 | cross-iteration precompute | correct, but the extra live state hurt scheduling more than it helped | rejected |
 | launch bounds, max register count, PAD changes, static N only | no stable win in paired runs | rejected |

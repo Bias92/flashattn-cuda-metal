@@ -1,8 +1,7 @@
 # Profiling records
 
-These records were collected before the directory cleanup. Names such as `fa3` and
-`db_full` below identify this repository's older kernels, not external FlashAttention
-releases. The original reports, filenames and screenshots are unchanged.
+Nsight Compute profiles recorded during kernel development. Report labels
+`fa3` and `db_full` refer to this project's kernel revisions.
 
 Older FP32/WMMA reports are in [legacy/](legacy/).
 
@@ -19,8 +18,7 @@ events and paired runs.
 | Memory throughput | 35.18% | 41.84% |
 | Achieved occupancy | 43.22% | 38.01% |
 
-The full Nsight Compute reports, text exports, and original uncropped UI
-captures are kept under `ncu/` and `ncu_sections/`.
+Reports and text exports: [ncu/](ncu/) and [ncu_sections/](ncu_sections/).
 
 The following FP32 and Custom CUDA profiles use different shapes and dtypes.
 Their durations are not directly comparable.
@@ -37,7 +35,7 @@ Their durations are not directly comparable.
 | Theoretical occupancy | 10.42% | 41.67% |
 | Achieved occupancy | 7.90% | 38.06% |
 | Active warps per SM | 3.79 | 18.27 |
-| Local spill signal | visible in Memory Workload | 0 local memory spilling requests |
+| Local Memory Spilling Requests | 0 | 0 |
 
 Nsight Compute screenshots:
 

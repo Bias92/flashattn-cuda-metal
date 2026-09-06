@@ -3,8 +3,8 @@ Variant comparison: double buffer(+L) vs precomputed addresses(+L / O-only)
 vs current kernel(+L / O-only)
 vs SDPA-Flash. Order rotated per rep.
 
-The O-only precomputed-addresses and current paths skip L computation. SDPA-Flash computes
-softmax_lse internally. bench/compare_pytorch.py compares current forward()+L
+The O-only precomputed-addresses and current paths skip L computation.
+bench/compare_pytorch.py compares current forward()+L
 against SDPA-Flash with 10 paired repetitions.
 """
 from pathlib import Path
@@ -23,7 +23,6 @@ mod_addr = load(name="attention_precomputed_addresses_cuda", sources=[str(ROOT /
 mod_full = load(name="attention_forward_cuda", sources=[str(ROOT / "cuda/attention_forward.cu")],
                 extra_cuda_cflags=FLAGS, verbose=False)
 
-# Log loaded binaries to identify stale builds.
 for _m in (mod_db, mod_addr, mod_full):
     print(f"so: {_m.__file__}")
 

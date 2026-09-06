@@ -1,9 +1,4 @@
-"""Custom CUDA (FULL_TILES specialization): correctness vs half-cast FP32 reference.
-
-Covers BOTH dispatch paths:
-  - full   (N % 64 == 0): N = 64, 128, 1024, 2048, 4096
-  - guarded (otherwise):  N = 1, 2, 7, 31, 33, 63, 127, 4095
-"""
+"""Test full-tile and guarded paths against FP32 arithmetic on FP16-rounded inputs."""
 from pathlib import Path
 
 import torch
@@ -66,7 +61,7 @@ def main():
         # guarded path
         (1, 1, 1, 64), (1, 1, 2, 64), (1, 1, 7, 64), (1, 1, 31, 64),
         (1, 1, 33, 64), (1, 1, 63, 64), (1, 1, 127, 64), (1, 1, 4095, 64),
-        (2, 4, 256, 64),
+        (2, 4, 256, 64),  # multi-head full-tile case
     ]
     passed = sum(test_config(*c) for c in configs)
     total = len(configs)

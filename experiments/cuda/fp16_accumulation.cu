@@ -1,16 +1,8 @@
 // ============================================================
 // experiments/cuda/fp16_accumulation.cu -- ABLATION: fp16-accumulate QK^T
 //
-// Identical to attention_forward.cu except the QK^T mma uses
-// m16n8k16.f16.f16.f16.f16 (fp16 accumulator, 2x tensor issue rate on
-// consumer Ada) instead of f32 accumulate. S is unpacked to fp32 right
-// after the mma chain; softmax and the PV mma (fp32 accumulate) are
-// unchanged. Layout of the f16 C fragment validated by
-// mma_layout_probe_cuda.probe_qk_f16acc on sm_89.
-//
-// Unlike custom and SDPA-Flash, QK accumulation uses fp16 here.
-// Rounding error grows with logit magnitude: fp16 ulp at |s|~40 is
-// ~0.03; at amp=16-scale logits, S error reaches O(1).
+// QK MMA accumulates in FP16, then converts scores to FP32 for scaling and softmax.
+// PV MMA accumulates in FP32.
 // ============================================================
 #include <torch/extension.h>
 #include <ATen/cuda/CUDAContext.h>
@@ -62,7 +54,7 @@ __device__ __forceinline__ void mma_m16n8k16(
 
 // fp16-accumulate QK mma: D/C are 2 b32 regs = 4 halves.
 // c0 = half2 for row l/4 (cols 2(l%4), +1), c1 = half2 for row l/4+8.
-// Layout validated by mma_layout_probe_cuda.probe_qk_f16acc.
+// Fragment-layout check: experiments/tests/test_layout_probe.py.
 __device__ __forceinline__ void mma_m16n8k16_f16acc(
     uint32_t& c0, uint32_t& c1,
     uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3,
