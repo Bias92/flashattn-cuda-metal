@@ -1,14 +1,14 @@
 """
-Benchmark: FlashAttention vs naive attention.
+Benchmark: FP32 FlashAttention vs PyTorch SDPA's math backend.
 Measures wall-clock time and peak GPU memory.
 """
 
 import torch
+import torch.nn.functional as F
+from torch.nn.attention import SDPBackend, sdpa_kernel
 import time
 import sys
 sys.path.insert(0, ".")
-
-from ref.naive_attn import naive_attention
 
 try:
     import flash_attn_cuda
@@ -48,18 +48,24 @@ def run_benchmark(B, H, N, D):
     V = torch.randn(B, H, N, D, device="cuda", dtype=torch.float32)
 
     # Time
-    t_naive = bench_fn(lambda: naive_attention(Q, K, V))
+    with sdpa_kernel(SDPBackend.MATH):
+        t_sdpa = bench_fn(lambda: F.scaled_dot_product_attention(
+            Q, K, V, dropout_p=0.0, is_causal=False
+        ))
     t_flash = bench_fn(lambda: flash_attn_cuda.forward(Q, K, V))
-    speedup = t_naive / t_flash
+    speedup = t_sdpa / t_flash
 
     # Memory
     torch.cuda.empty_cache()
-    mem_naive = bench_memory(lambda: naive_attention(Q, K, V))
+    with sdpa_kernel(SDPBackend.MATH):
+        mem_sdpa = bench_memory(lambda: F.scaled_dot_product_attention(
+            Q, K, V, dropout_p=0.0, is_causal=False
+        ))
     torch.cuda.empty_cache()
     mem_flash = bench_memory(lambda: flash_attn_cuda.forward(Q, K, V))
-    mem_ratio = mem_naive / mem_flash if mem_flash > 0 else float("inf")
+    mem_ratio = mem_sdpa / mem_flash if mem_flash > 0 else float("inf")
 
-    print(f"N={N:>5}  |  naive: {t_naive:>8.2f}ms  {mem_naive:>8.1f}MB  |  "
+    print(f"N={N:>5}  |  SDPA-MATH: {t_sdpa:>8.2f}ms  {mem_sdpa:>8.1f}MB  |  "
           f"flash: {t_flash:>8.2f}ms  {mem_flash:>8.1f}MB  |  "
           f"speedup: {speedup:.2f}x  mem_save: {mem_ratio:.2f}x")
 
@@ -67,7 +73,7 @@ def run_benchmark(B, H, N, D):
 if __name__ == "__main__":
     B, H, D = 1, 8, 64
     print("=" * 80)
-    print(f"FlashAttention Benchmark (B={B}, H={H}, D={D}, fp32)")
+    print(f"FP32 FlashAttention vs PyTorch SDPA-MATH (B={B}, H={H}, D={D})")
     print(f"GPU: {torch.cuda.get_device_name(0)}")
     print("=" * 80)
 

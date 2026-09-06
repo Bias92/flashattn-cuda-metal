@@ -9,7 +9,7 @@ Forward kernel used in the benchmark below:
 cuda/flash_attn_mma_db_full.cu
 ```
 
-Forward latency compared with PyTorch SDPA-Flash:
+Forward latency compared with [PyTorch SDPA](https://docs.pytorch.org/docs/stable/generated/torch.nn.functional.scaled_dot_product_attention.html), using its `FLASH_ATTENTION` backend:
 
 | N | db_full, +L | PyTorch SDPA-Flash | gap |
 |---:|---:|---:|---:|
@@ -20,6 +20,8 @@ Forward latency compared with PyTorch SDPA-Flash:
 Tested on RTX 4060 Ti, CUDA 12.8, PyTorch 2.10.0+cu128, B=1, H=8, D=64,
 FP16 input, FP32 accumulate, non-causal forward. The numbers above are 10-run
 paired medians from `bench/bench_mma_headline.py`.
+The script calls `torch.nn.functional.scaled_dot_product_attention` inside
+`sdpa_kernel(SDPBackend.FLASH_ATTENTION)`.
 
 <p align="center">
   <img src="docs/profiling/benchmark_comparison.png" width="720" alt="Forward benchmark">
@@ -165,13 +167,6 @@ The mma line is checked against a half-cast PyTorch reference.
 
 The FP32 forward tests are also included.
 
-## Memory Baseline
-
-At `N=4096`, the naive attention path used about 1576 MB. The FlashAttention
-FP32 baseline used about 40 MB.
-
-Naive / FlashAttention memory ratio: 39.16x.
-
 ## Build And Run
 
 The repo was developed on WSL2 Ubuntu with CUDA 12.8.
@@ -187,6 +182,10 @@ python3 tests/test_mma_probe.py
 python3 tests/test_mma_db_full.py
 python3 bench/bench_mma_headline.py
 ```
+
+For the older FP32 kernel, `python3 bench/bench_forward.py` compares against
+PyTorch SDPA's `MATH` backend. This is separate from the FP16 Flash-backend
+comparison above. No results from the new math-backend comparison are recorded yet.
 
 Other useful scripts:
 
