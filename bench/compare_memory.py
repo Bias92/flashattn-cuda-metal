@@ -12,8 +12,11 @@ every baseline here is an unmodified, importable implementation:
              "eager attention" means in the ecosystem.
   flash   sdpa_kernel(SDPBackend.FLASH_ATTENTION) + F.scaled_dot_product_attention
   math    sdpa_kernel(SDPBackend.MATH) + F.scaled_dot_product_attention
-          -> PyTorch's composite reference. On torch 2.10 it upcasts fp16
-             inputs to fp32 (observed), so it is reported for reference only.
+          -> PyTorch's composite reference. Accepts fp16 inputs but keeps
+             ALL intermediates (QK^T, softmax, PV) in fp32 on torch 2.10
+             (observed). eager keeps matmuls in fp16 and only the softmax in
+             fp32, so its footprint is closer to a real fp16 deployment; math
+             is shown for reference with that difference labeled.
 
 The compute dtype of eager and math is OBSERVED from the CUDA kernel symbols
 they launch and printed before any ratio.
@@ -144,7 +147,7 @@ def main():
         print(f"{'N':>6} | {'ours':>9} {'flash':>9} {'eager':>9} {'math':>9} | "
               f"{'eager/ours':>10} {'math/ours':>10} | {'NxN fp16':>9}")
         print(f"{'':>6} | {'MiB':>9} {'MiB':>9} {'MiB':>9} {'MiB':>9} | "
-              f"{'':>10} {'(fp32!)':>10} | {'MiB':>9}")
+              f"{'':>10} {'(fp32 int.)':>10} | {'MiB':>9}")
         print("-" * 108)
 
         for N in [1024, 2048, 4096, 8192]:
@@ -167,8 +170,9 @@ def main():
     print("ours  : attention_forward.forward (O + L).   flash: SDPA FLASH_ATTENTION backend.")
     print(f"eager : transformers eager_attention_forward, unmodified (observed {sorted(t_eager)}: "
           "fp16 matmuls, softmax computed in fp32 then cast back -- that is how eager runs in practice).")
-    print(f"math  : SDPA MATH backend (observed {sorted(t_math)}); upcasts fp16 to fp32 on this torch, "
-          "reference only.")
+    print(f"math  : SDPA MATH backend (observed {sorted(t_math)}); accepts fp16 but computes all "
+          "intermediates (QK^T, softmax, PV) in fp32 on this torch. Shown for reference; the")
+    print("        difference from eager is degree (all-fp32 vs fp32-softmax-only), not kind.")
     print("NxN fp16: one N x N x H fp16 score tensor = lower bound for any implementation that "
           "materializes scores in fp16.")
 
