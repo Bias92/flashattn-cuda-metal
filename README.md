@@ -1,7 +1,7 @@
 # flashattn-cuda
 
-FlashAttention-2 style forward in CUDA and inline PTX, no CUTLASS.
-FP16 in, FP32 accumulate, D=64, non-causal. RTX 4060 Ti (sm_89).
+A FlashAttention-2 forward kernel written from scratch in CUDA without CUTLASS, for the RTX 4060 Ti.
+It takes fp16 inputs, accumulates in fp32, and supports head dim 64 and non-causal attention only.
 
 ## Latency vs PyTorch SDPA Flash
 
