@@ -1,10 +1,10 @@
-"""Single fa3-db forward launch for ncu profiling. N=4096 B=1 H=8 D=64 FP16."""
+"""Single mma-db forward launch for ncu profiling. N=4096 B=1 H=8 D=64 FP16."""
 import torch
 from torch.utils.cpp_extension import load
 
 mod = load(
-    name="flash_attn_fa3_db",
-    sources=["cuda/flash_attn_fa3_db.cu"],
+    name="flash_attn_mma_db",
+    sources=["cuda/flash_attn_mma_db.cu"],
     extra_cuda_cflags=["-O3", "--use_fast_math", "-gencode=arch=compute_89,code=sm_89"],
     verbose=False,
 )

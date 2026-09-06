@@ -1,10 +1,10 @@
 """
-Variant shoot-out: fa3-db(+L) vs db_addr(+L / O-only) vs db_full(+L / O-only)
+Variant shoot-out: mma-db(+L) vs db_addr(+L / O-only) vs db_full(+L / O-only)
 vs SDPA-Flash. Order rotated per rep.
 
 Headline comparisons must use forward()+L: SDPA always computes softmax_lse,
 so the O-only variants do strictly less work. The canonical headline number
-comes from bench_fa3_headline.py (10-run paired), not this script.
+comes from bench_mma_headline.py (10-run paired), not this script.
 """
 import torch
 import torch.nn.functional as F
@@ -12,11 +12,11 @@ from torch.nn.attention import sdpa_kernel, SDPBackend
 from torch.utils.cpp_extension import load
 
 FLAGS = ["-O3", "--use_fast_math", "-gencode=arch=compute_89,code=sm_89"]
-mod_db = load(name="flash_attn_fa3_db", sources=["cuda/flash_attn_fa3_db.cu"],
+mod_db = load(name="flash_attn_mma_db", sources=["cuda/flash_attn_mma_db.cu"],
               extra_cuda_cflags=FLAGS, verbose=False)
-mod_addr = load(name="flash_attn_fa3_db_addr", sources=["cuda/flash_attn_fa3_db_addr.cu"],
+mod_addr = load(name="flash_attn_mma_db_addr", sources=["cuda/flash_attn_mma_db_addr.cu"],
                 extra_cuda_cflags=FLAGS, verbose=False)
-mod_full = load(name="flash_attn_fa3_db_full", sources=["cuda/flash_attn_fa3_db_full.cu"],
+mod_full = load(name="flash_attn_mma_db_full", sources=["cuda/flash_attn_mma_db_full.cu"],
                 extra_cuda_cflags=FLAGS, verbose=False)
 
 # stale-.so guard: always show exactly which binaries this run measured
@@ -48,7 +48,7 @@ def main():
     B, H, D = 1, 8, 64
     torch.manual_seed(42)
     print("=" * 110)
-    print(f"FA3 variants (B={B}, H={H}, D={D}, FP16) — median of {REPS} rotated reps")
+    print(f"MMA variants (B={B}, H={H}, D={D}, FP16) — median of {REPS} rotated reps")
     print(f"GPU: {torch.cuda.get_device_name(0)}")
     print("=" * 110)
 

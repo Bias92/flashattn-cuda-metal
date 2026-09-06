@@ -1,8 +1,8 @@
-"""Profile exactly one FA3-family forward launch with Nsight Compute.
+"""Profile exactly one MMA-family forward launch with Nsight Compute.
 
 Usage:
-  python3 bench/profile_fa3_ncu_once.py fa3 1024
-  python3 bench/profile_fa3_ncu_once.py db_full 1024
+  python3 bench/profile_mma_ncu_once.py mma 1024
+  python3 bench/profile_mma_ncu_once.py db_full 1024
 
 Run ncu with --profile-from-start off so warmup and tensor initialization do
 not pollute the report.
@@ -17,17 +17,17 @@ FLAGS = ["-O3", "--use_fast_math", "-gencode=arch=compute_89,code=sm_89"]
 
 
 def load_variant(name):
-    if name == "fa3":
+    if name == "mma":
         return load(
-            name="flash_attn_fa3",
-            sources=["cuda/flash_attn_fa3.cu"],
+            name="flash_attn_mma",
+            sources=["cuda/flash_attn_mma.cu"],
             extra_cuda_cflags=FLAGS,
             verbose=False,
         )
     if name == "db_full":
         return load(
-            name="flash_attn_fa3_db_full",
-            sources=["cuda/flash_attn_fa3_db_full.cu"],
+            name="flash_attn_mma_db_full",
+            sources=["cuda/flash_attn_mma_db_full.cu"],
             extra_cuda_cflags=FLAGS,
             verbose=False,
         )

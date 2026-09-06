@@ -3,7 +3,7 @@
 Working title: *Anatomy of a Scratch FlashAttention Kernel: A Profiling-Driven
 Optimization Chain on a Consumer Ada GPU*
 
-원칙: 모든 수치는 `docs/fa3_handoff.md` §0의 확정 headline과 §4 ablation 표에서만
+원칙: 모든 수치는 `docs/mma_handoff.md` §0의 확정 headline과 §4 ablation 표에서만
 가져온다. "faster than SDPA" 계열 표현 금지. 문구는 "within 1–3% of SDPA-Flash
 (N=2048/4096, paired), while remaining slower overall".
 
@@ -35,7 +35,7 @@ Optimization Chain on a Consumer Ada GPU*
 | 단계 | N=4096 | 핵심 계측 |
 |---|---|---|
 | fa2 (WMMA API, scalar PV) | ~3.2ms | roofline: scalar PV의 산술적 하한이 SDPA 전체 시간과 동급 |
-| fa3 (mma.sync, reg softmax) | 1.04ms | sS/sP 왕복 소멸, sync 10+→2/tile |
+| mma (mma.sync, reg softmax) | 1.04ms | sS/sP 왕복 소멸, sync 10+→2/tile |
 | +cp.async double buffer | 0.92ms | 로드-계산 오버랩; DRAM 4%, L2 hit 98.5% |
 | +address strength reduction | 0.89ms | SASS 정수 연산 ~58%↓, HMMA 간격 4-10→2-4 |
 | +FULL_TILES specialization | 0.873ms | ISETP 20→6, SEL 5→1 (+L 커널) |
@@ -54,7 +54,7 @@ Optimization Chain on a Consumer Ada GPU*
 | (fa2 시절) 다수: multi-warp, sP 패딩 등 | 기존 README 표 | — |
 
 ## 7. Results
-- headline 표 (fa3_handoff §0 그대로) + 시퀀스 길이 스케일링.
+- headline 표 (mma_handoff §0 그대로) + 시퀀스 길이 스케일링.
 - 대 naive 메모리 절약 (39x)은 별도 축 — speedup과 혼용 금지.
 
 ## 8. Related Work
@@ -63,9 +63,9 @@ Optimization Chain on a Consumer Ada GPU*
 
 ## 9. Future Work
 - Jetson AGX Orin (sm_87) 동일 커널/방법론 교차 프로파일링 (졸프2 계획).
-- causal masking, D=128, backward의 fa3 구조 이식.
+- causal masking, D=128, backward의 mma 구조 이식.
 - cross-iteration 파이프라이닝 (barrier/stage lifetime 재설계 필요 — 난이도 상).
 
 ## Artifact
 - repo 공개 (MIT), probe→test→bench 재현 스크립트 전부 포함.
-- 재현 순서: mma_probe → test_fa3_db_full → bench_fa3_headline.
+- 재현 순서: mma_probe → test_mma_db_full → bench_mma_headline.

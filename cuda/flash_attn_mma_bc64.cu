@@ -1,18 +1,12 @@
 // ============================================================
-// flash_attn_fa3_db_full.cu -- db_addr + FULL_TILES specialization
+// flash_attn_mma_bc64.cu -- mma-db variant with BC=64 KV tiles
 //
-// Identical math/layout/cp.async/softmax to flash_attn_fa3_db_addr.cu.
-// Adds a FULL_TILES template path selected on the host when
-// (N % BR == 0) && (N % BC == 0):
-//   - issue_kv: unguarded cp.async (no g<N compare/select, src_size 16)
-//   - Q staging: unguarded loads
-//   - tail column mask: compiled out
-//   - epilogue: unguarded O/L stores
-// The guarded (FULL_TILES=false) path is byte-for-byte the db_addr logic,
-// so non-multiple-of-tile N (33, 63, 127, 4095, ...) behaves identically.
-//
-// Success bar: correctness identical, spill 0, REG <= 102,
-// N=4096 1-3% over db_addr.
+// Identical math/structure to flash_attn_mma_db.cu, single knob change:
+// BC 32 -> 64. Halves the KV-loop iteration count (and thus barriers and
+// per-tile softmax passes) at the cost of ~2x S/P register state
+// (s[8][4] + pf[4][4]) and 2x shared memory (2 stages x 18.4KB = 36.9KB,
+// which caps occupancy at 2 blocks/SM). Experiment: math-throttle-bound
+// kernel may or may not profit. Measure, don't assume.
 // ============================================================
 #include <torch/extension.h>
 #include <ATen/cuda/CUDAContext.h>
@@ -24,7 +18,7 @@
 
 constexpr int HD = 64;
 constexpr int BR = 64;
-constexpr int BC = 32;
+constexpr int BC = 64;      // <-- the experiment
 constexpr int PAD = 8;
 constexpr int NWARPS = BR / 16;
 
@@ -84,9 +78,9 @@ __device__ __forceinline__ void cp_async_wait() {
 // ============================================================
 // Forward kernel
 // ============================================================
-template <int D, bool WRITE_L, bool FULL_TILES>
+template <int D, bool WRITE_L>
 __global__ void __launch_bounds__(NWARPS * 32)
-fa3db_full_fwd_kernel(
+mma_bc64_fwd_kernel(
     const half* __restrict__ Q,
     const half* __restrict__ K,
     const half* __restrict__ V,
@@ -100,8 +94,7 @@ fa3db_full_fwd_kernel(
     constexpr int KSLICES_PV = BC / 16;
     constexpr int NTILES_O = D / 8;
     constexpr int STAGE = 2 * BC * LDS;
-    constexpr uint32_t STAGE_BYTES = STAGE * sizeof(half);
-    constexpr uint32_t ROW_BYTES = LDS * sizeof(half);
+    constexpr int CHUNKS = 2 * BC * D / 8;
 
     const int tid  = threadIdx.x;
     const int warp = tid / 32;
@@ -113,63 +106,39 @@ fa3db_full_fwd_kernel(
     const half* K_bh = K + (size_t)bh * N * D;
     const half* V_bh = V + (size_t)bh * N * D;
     half* O_bh = O + (size_t)bh * N * D;
-    // L_bh is derived inside the WRITE_L epilogue only (no pointer
-    // arithmetic on a null L when WRITE_L == false).
+    float* L_bh = L + (size_t)bh * N;
 
     __shared__ __align__(16) half smem[2 * STAGE];
 
-    const uint32_t smem_base = smem_u32(smem);
-    uint32_t cur_base  = smem_base;
-    uint32_t next_base = smem_base + STAGE_BYTES;
-
-    const int r0 = tid >> 3;
-    const int r1 = r0 + 16;
-    const int cc = (tid & 7) << 3;
-    const uint32_t k0_off = (uint32_t)(r0 * LDS + cc) * sizeof(half);
-    const uint32_t k1_off = (uint32_t)(r1 * LDS + cc) * sizeof(half);
-    const uint32_t v0_off = (uint32_t)((BC + r0) * LDS + cc) * sizeof(half);
-    const uint32_t v1_off = (uint32_t)((BC + r1) * LDS + cc) * sizeof(half);
-
-    auto issue_kv_fast = [&](uint32_t sbase, int kv) {
-        if constexpr (FULL_TILES) {
-            // N % BC == 0 guarantees every issued row is in range.
-            cp_async_16(sbase + k0_off, K_bh + (size_t)(kv + r0) * D + cc, 16);
-            cp_async_16(sbase + k1_off, K_bh + (size_t)(kv + r1) * D + cc, 16);
-            cp_async_16(sbase + v0_off, V_bh + (size_t)(kv + r0) * D + cc, 16);
-            cp_async_16(sbase + v1_off, V_bh + (size_t)(kv + r1) * D + cc, 16);
-        } else {
-            int g0 = kv + r0, g1 = kv + r1;
-            const half* k0 = K_bh + (size_t)(g0 < N ? g0 : 0) * D + cc;
-            const half* k1 = K_bh + (size_t)(g1 < N ? g1 : 0) * D + cc;
-            const half* v0 = V_bh + (size_t)(g0 < N ? g0 : 0) * D + cc;
-            const half* v1 = V_bh + (size_t)(g1 < N ? g1 : 0) * D + cc;
-            cp_async_16(sbase + k0_off, k0, (g0 < N) ? 16 : 0);
-            cp_async_16(sbase + k1_off, k1, (g1 < N) ? 16 : 0);
-            cp_async_16(sbase + v0_off, v0, (g0 < N) ? 16 : 0);
-            cp_async_16(sbase + v1_off, v1, (g1 < N) ? 16 : 0);
+    auto issue_kv = [&](int s, int kv) {
+        half* base = smem + s * STAGE;
+        #pragma unroll
+        for (int c = tid; c < CHUNKS; c += NWARPS * 32) {
+            int mat = c / (CHUNKS / 2);
+            int rem = c % (CHUNKS / 2);
+            int r = rem / (D / 8);
+            int cc = (rem % (D / 8)) * 8;
+            int gr = kv + r;
+            const half* src = (mat == 0 ? K_bh : V_bh) + (size_t)(gr < N ? gr : 0) * D + cc;
+            uint32_t dst = smem_u32(base + (mat * BC + r) * LDS + cc);
+            cp_async_16(dst, src, (gr < N) ? 16 : 0);
         }
         cp_async_commit();
     };
 
-    // ---- Kick off K/V stage 0 while staging Q into the other stage ----
-    issue_kv_fast(cur_base, 0);
+    // ---- Kick off K/V stage 0 while staging Q into stage-1 space ----
+    issue_kv(0, 0);
     {
         half (*sQ)[LDS] = reinterpret_cast<half(*)[LDS]>(smem + STAGE);
         const int total_h2 = BR * D / 2;
         for (int i = tid; i < total_h2; i += blockDim.x) {
             int flat = i * 2;
             int r = flat / D, c = flat % D;
-            if constexpr (FULL_TILES) {
-                // N % BR == 0 guarantees every Q row in this block is valid.
-                *reinterpret_cast<half2*>(&sQ[r][c]) =
-                    *reinterpret_cast<const half2*>(&Q_bh[(size_t)(q_block + r) * D + c]);
-            } else {
-                int gr = q_block + r;
-                half2 val = (gr < N)
-                    ? *reinterpret_cast<const half2*>(&Q_bh[(size_t)gr * D + c])
-                    : __float2half2_rn(0.0f);
-                *reinterpret_cast<half2*>(&sQ[r][c]) = val;
-            }
+            int gr = q_block + r;
+            half2 val = (gr < N)
+                ? *reinterpret_cast<const half2*>(&Q_bh[(size_t)gr * D + c])
+                : __float2half2_rn(0.0f);
+            *reinterpret_cast<half2*>(&sQ[r][c]) = val;
         }
         __syncthreads();
     }
@@ -187,11 +156,6 @@ fa3db_full_fwd_kernel(
     }
     __syncthreads();
 
-    const uint32_t qk_lane_base =
-        (uint32_t)((lane & 7) * LDS + ((lane < 8) ? 0 : 8)) * sizeof(half);
-    const uint32_t pv_lane_base =
-        (uint32_t)((BC + (lane & 15)) * LDS) * sizeof(half);
-
     float o_acc[NTILES_O][4];
     #pragma unroll
     for (int t = 0; t < NTILES_O; t++)
@@ -208,42 +172,42 @@ fa3db_full_fwd_kernel(
         const bool has_next = (i + 1) < nblocks;
 
         if (has_next) {
-            issue_kv_fast(next_base, kv + BC);
+            issue_kv((i + 1) & 1, kv + BC);
             cp_async_wait<1>();
         } else {
             cp_async_wait<0>();
         }
         __syncthreads();
 
-        const uint32_t qk_base = cur_base + qk_lane_base;
-        const uint32_t pv_base = cur_base + pv_lane_base;
+        half (*sK)[LDS] = reinterpret_cast<half(*)[LDS]>(smem + (i & 1) * STAGE);
+        half (*sV)[LDS] = reinterpret_cast<half(*)[LDS]>(smem + (i & 1) * STAGE + BC * LDS);
 
         // ---- S = Q K^T ----
         float s[NTILES_S][4];
-        #pragma unroll
-        for (int t = 0; t < NTILES_S; t++) {
-            s[t][0] = s[t][1] = s[t][2] = s[t][3] = 0.0f;
+        {
+            int br = lane % 8;
+            int bk = (lane < 8) ? 0 : 8;
             #pragma unroll
-            for (int ks = 0; ks < KSLICES; ks++) {
-                uint32_t b0, b1;
-                ldmatrix_x2(b0, b1,
-                    qk_base + (uint32_t)(t * 8) * ROW_BYTES
-                            + (uint32_t)(ks * 16) * sizeof(half));
-                mma_m16n8k16(s[t][0], s[t][1], s[t][2], s[t][3],
-                             qf[ks][0], qf[ks][1], qf[ks][2], qf[ks][3], b0, b1);
+            for (int t = 0; t < NTILES_S; t++) {
+                s[t][0] = s[t][1] = s[t][2] = s[t][3] = 0.0f;
+                #pragma unroll
+                for (int ks = 0; ks < KSLICES; ks++) {
+                    uint32_t b0, b1;
+                    ldmatrix_x2(b0, b1, smem_u32(&sK[t * 8 + br][ks * 16 + bk]));
+                    mma_m16n8k16(s[t][0], s[t][1], s[t][2], s[t][3],
+                                 qf[ks][0], qf[ks][1], qf[ks][2], qf[ks][3], b0, b1);
+                }
+                #pragma unroll
+                for (int j = 0; j < 4; j++) s[t][j] *= scale_log2;
             }
-            #pragma unroll
-            for (int j = 0; j < 4; j++) s[t][j] *= scale_log2;
         }
 
-        if constexpr (!FULL_TILES) {
-            if (kv + BC > N) {
-                #pragma unroll
-                for (int t = 0; t < NTILES_S; t++) {
-                    int col0 = kv + t * 8 + 2 * (lane % 4);
-                    if (col0 >= N)     { s[t][0] = -INFINITY; s[t][2] = -INFINITY; }
-                    if (col0 + 1 >= N) { s[t][1] = -INFINITY; s[t][3] = -INFINITY; }
-                }
+        if (kv + BC > N) {
+            #pragma unroll
+            for (int t = 0; t < NTILES_S; t++) {
+                int col0 = kv + t * 8 + 2 * (lane % 4);
+                if (col0 >= N)     { s[t][0] = -INFINITY; s[t][2] = -INFINITY; }
+                if (col0 + 1 >= N) { s[t][1] = -INFINITY; s[t][3] = -INFINITY; }
             }
         }
 
@@ -299,21 +263,20 @@ fa3db_full_fwd_kernel(
             o_acc[t][2] *= alpha_hi;
             o_acc[t][3] *= alpha_hi;
         }
-        #pragma unroll
-        for (int t = 0; t < NTILES_O; t++) {
+        {
+            int vr = lane % 16;
             #pragma unroll
-            for (int ks = 0; ks < KSLICES_PV; ks++) {
-                uint32_t b0, b1;
-                ldmatrix_x2_trans(b0, b1,
-                    pv_base + (uint32_t)(ks * 16) * ROW_BYTES
-                            + (uint32_t)(t * 8) * sizeof(half));
-                mma_m16n8k16(o_acc[t][0], o_acc[t][1], o_acc[t][2], o_acc[t][3],
-                             pf[ks][0], pf[ks][1], pf[ks][2], pf[ks][3], b0, b1);
+            for (int t = 0; t < NTILES_O; t++) {
+                #pragma unroll
+                for (int ks = 0; ks < KSLICES_PV; ks++) {
+                    uint32_t b0, b1;
+                    ldmatrix_x2_trans(b0, b1, smem_u32(&sV[ks * 16 + vr][t * 8]));
+                    mma_m16n8k16(o_acc[t][0], o_acc[t][1], o_acc[t][2], o_acc[t][3],
+                                 pf[ks][0], pf[ks][1], pf[ks][2], pf[ks][3], b0, b1);
+                }
             }
         }
         __syncthreads();
-
-        uint32_t tmp = cur_base; cur_base = next_base; next_base = tmp;
     }
 
     const float inv_lo = 1.0f / l_lo;
@@ -325,28 +288,25 @@ fa3db_full_fwd_kernel(
     #pragma unroll
     for (int t = 0; t < NTILES_O; t++) {
         int col = t * 8 + cbase;
-        if (FULL_TILES || r_lo < N) {
+        if (r_lo < N) {
             half2 v = __floats2half2_rn(o_acc[t][0] * inv_lo, o_acc[t][1] * inv_lo);
             *reinterpret_cast<half2*>(&O_bh[(size_t)r_lo * D + col]) = v;
         }
-        if (FULL_TILES || r_hi < N) {
+        if (r_hi < N) {
             half2 v = __floats2half2_rn(o_acc[t][2] * inv_hi, o_acc[t][3] * inv_hi);
             *reinterpret_cast<half2*>(&O_bh[(size_t)r_hi * D + col]) = v;
         }
     }
-    if constexpr (WRITE_L) {
-        if (lane % 4 == 0) {
-            float* L_bh = L + (size_t)bh * N;
-            if (FULL_TILES || r_lo < N) L_bh[r_lo] = m_lo * LN2f + logf(l_lo);
-            if (FULL_TILES || r_hi < N) L_bh[r_hi] = m_hi * LN2f + logf(l_hi);
-        }
+    if (WRITE_L && lane % 4 == 0) {
+        if (r_lo < N) L_bh[r_lo] = m_lo * LN2f + logf(l_lo);
+        if (r_hi < N) L_bh[r_hi] = m_hi * LN2f + logf(l_hi);
     }
 }
 
 // ============================================================
 // Host launchers
 // ============================================================
-static std::pair<torch::Tensor, torch::Tensor> fa3db_full_forward_impl(
+static std::pair<torch::Tensor, torch::Tensor> mma_bc64_forward_impl(
     torch::Tensor Q, torch::Tensor K, torch::Tensor V, bool want_L)
 {
     TORCH_CHECK(Q.is_cuda() && K.is_cuda() && V.is_cuda(), "Q/K/V must be CUDA tensors");
@@ -388,31 +348,25 @@ static std::pair<torch::Tensor, torch::Tensor> fa3db_full_forward_impl(
             L_ptr,
             N);
     };
-    const bool full_tiles = (N % BR == 0) && (N % BC == 0);
-    if (want_L) {
-        if (full_tiles) launch(fa3db_full_fwd_kernel<HD, true, true>);
-        else            launch(fa3db_full_fwd_kernel<HD, true, false>);
-    } else {
-        if (full_tiles) launch(fa3db_full_fwd_kernel<HD, false, true>);
-        else            launch(fa3db_full_fwd_kernel<HD, false, false>);
-    }
+    if (want_L) launch(mma_bc64_fwd_kernel<HD, true>);
+    else        launch(mma_bc64_fwd_kernel<HD, false>);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 
     return {O_h.reshape({B, H, N, D}),
             want_L ? L.reshape({B, H, N}) : torch::Tensor()};
 }
 
-std::vector<torch::Tensor> fa3db_full_forward(torch::Tensor Q, torch::Tensor K, torch::Tensor V) {
-    auto [O, L] = fa3db_full_forward_impl(Q, K, V, /*want_L=*/true);
+std::vector<torch::Tensor> mma_bc64_forward(torch::Tensor Q, torch::Tensor K, torch::Tensor V) {
+    auto [O, L] = mma_bc64_forward_impl(Q, K, V, /*want_L=*/true);
     return {O, L};
 }
 
-torch::Tensor fa3db_full_forward_only(torch::Tensor Q, torch::Tensor K, torch::Tensor V) {
-    auto [O, L] = fa3db_full_forward_impl(Q, K, V, /*want_L=*/false);
+torch::Tensor mma_bc64_forward_only(torch::Tensor Q, torch::Tensor K, torch::Tensor V) {
+    auto [O, L] = mma_bc64_forward_impl(Q, K, V, /*want_L=*/false);
     return O;
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-    m.def("forward", &fa3db_full_forward, "FA3 db_addr + FULL_TILES forward: returns O half, L float");
-    m.def("forward_only", &fa3db_full_forward_only, "FA3 db_addr + FULL_TILES forward, true O-only");
+    m.def("forward", &mma_bc64_forward, "MMA BC=64 forward: returns O half, L float");
+    m.def("forward_only", &mma_bc64_forward_only, "MMA BC=64 forward, true O-only");
 }

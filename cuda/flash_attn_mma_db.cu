@@ -1,19 +1,14 @@
-// ============================================================
-// flash_attn_fa3_fp16acc.cu -- ABLATION: fp16-accumulate QK^T
+﻿// ============================================================
+// flash_attn_mma_db.cu -- mma + cp.async 2-stage K/V double buffering
 //
-// Identical to flash_attn_fa3_db_full.cu except the QK^T mma uses
-// m16n8k16.f16.f16.f16.f16 (fp16 accumulator, 2x tensor issue rate on
-// consumer Ada) instead of f32 accumulate. S is unpacked to fp32 right
-// after the mma chain; softmax and the PV mma (fp32 accumulate) are
-// unchanged. Layout of the f16 C fragment validated by
-// mma_probe.probe_qk_f16acc on sm_89.
+// Identical math/layout to flash_attn_mma.cu (probe-validated).
+// Single change vs v1: K/V tiles are fetched with cp.async.cg into
+// alternating shared buffers, so the next tile's global loads overlap
+// the current tile's tensor-core compute. Q staging reuses buffer 1
+// while the first K/V group is already in flight into buffer 0.
 //
-// PAPER ABLATION ONLY — NOT a mainline candidate:
-//   - SDPA-Flash keeps fp32 accumulation, so any speed comparison
-//     against it is not apples-to-apples. Never use for headline.
-//   - Accuracy degrades with logit magnitude: fp16 ulp at |s|~40 is
-//     ~0.03; at amp=16-scale logits the S error reaches O(1) and
-//     softmax weights are visibly wrong. Measure, report, done.
+// Shared memory: 2 stages x (K+V) x 32 x 72 halves = 18KB.
+// PAD=8 keeps every 16B cp.async destination aligned (72*2 = 144 = 9*16).
 // ============================================================
 #include <torch/extension.h>
 #include <ATen/cuda/CUDAContext.h>
@@ -63,21 +58,6 @@ __device__ __forceinline__ void mma_m16n8k16(
         : "r"(a0), "r"(a1), "r"(a2), "r"(a3), "r"(b0), "r"(b1));
 }
 
-// fp16-accumulate QK mma: D/C are 2 b32 regs = 4 halves.
-// c0 = half2 for row l/4 (cols 2(l%4), +1), c1 = half2 for row l/4+8.
-// Layout validated by mma_probe.probe_qk_f16acc.
-__device__ __forceinline__ void mma_m16n8k16_f16acc(
-    uint32_t& c0, uint32_t& c1,
-    uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3,
-    uint32_t b0, uint32_t b1)
-{
-    asm volatile(
-        "mma.sync.aligned.m16n8k16.row.col.f16.f16.f16.f16 "
-        "{%0,%1}, {%2,%3,%4,%5}, {%6,%7}, {%0,%1};\n"
-        : "+r"(c0), "+r"(c1)
-        : "r"(a0), "r"(a1), "r"(a2), "r"(a3), "r"(b0), "r"(b1));
-}
-
 __device__ __forceinline__ uint32_t pack_half2(float x, float y) {
     half2 h = __floats2half2_rn(x, y);
     return *reinterpret_cast<uint32_t*>(&h);
@@ -100,9 +80,9 @@ __device__ __forceinline__ void cp_async_wait() {
 // ============================================================
 // Forward kernel
 // ============================================================
-template <int D, bool WRITE_L, bool FULL_TILES>
+template <int D, bool WRITE_L>
 __global__ void __launch_bounds__(NWARPS * 32)
-fa3fp16a_fwd_kernel(
+mma_db_fwd_kernel(
     const half* __restrict__ Q,
     const half* __restrict__ K,
     const half* __restrict__ V,
@@ -115,9 +95,8 @@ fa3fp16a_fwd_kernel(
     constexpr int NTILES_S = BC / 8;
     constexpr int KSLICES_PV = BC / 16;
     constexpr int NTILES_O = D / 8;
-    constexpr int STAGE = 2 * BC * LDS;
-    constexpr uint32_t STAGE_BYTES = STAGE * sizeof(half);
-    constexpr uint32_t ROW_BYTES = LDS * sizeof(half);
+    constexpr int STAGE = 2 * BC * LDS;          // halves per stage (K tile + V tile)
+    constexpr int CHUNKS = 2 * BC * D / 8;       // 16B chunks per stage (K+V)
 
     const int tid  = threadIdx.x;
     const int warp = tid / 32;
@@ -129,63 +108,41 @@ fa3fp16a_fwd_kernel(
     const half* K_bh = K + (size_t)bh * N * D;
     const half* V_bh = V + (size_t)bh * N * D;
     half* O_bh = O + (size_t)bh * N * D;
-    // L_bh is derived inside the WRITE_L epilogue only (no pointer
-    // arithmetic on a null L when WRITE_L == false).
+    float* L_bh = L + (size_t)bh * N;
 
     __shared__ __align__(16) half smem[2 * STAGE];
 
-    const uint32_t smem_base = smem_u32(smem);
-    uint32_t cur_base  = smem_base;
-    uint32_t next_base = smem_base + STAGE_BYTES;
-
-    const int r0 = tid >> 3;
-    const int r1 = r0 + 16;
-    const int cc = (tid & 7) << 3;
-    const uint32_t k0_off = (uint32_t)(r0 * LDS + cc) * sizeof(half);
-    const uint32_t k1_off = (uint32_t)(r1 * LDS + cc) * sizeof(half);
-    const uint32_t v0_off = (uint32_t)((BC + r0) * LDS + cc) * sizeof(half);
-    const uint32_t v1_off = (uint32_t)((BC + r1) * LDS + cc) * sizeof(half);
-
-    auto issue_kv_fast = [&](uint32_t sbase, int kv) {
-        if constexpr (FULL_TILES) {
-            // N % BC == 0 guarantees every issued row is in range.
-            cp_async_16(sbase + k0_off, K_bh + (size_t)(kv + r0) * D + cc, 16);
-            cp_async_16(sbase + k1_off, K_bh + (size_t)(kv + r1) * D + cc, 16);
-            cp_async_16(sbase + v0_off, V_bh + (size_t)(kv + r0) * D + cc, 16);
-            cp_async_16(sbase + v1_off, V_bh + (size_t)(kv + r1) * D + cc, 16);
-        } else {
-            int g0 = kv + r0, g1 = kv + r1;
-            const half* k0 = K_bh + (size_t)(g0 < N ? g0 : 0) * D + cc;
-            const half* k1 = K_bh + (size_t)(g1 < N ? g1 : 0) * D + cc;
-            const half* v0 = V_bh + (size_t)(g0 < N ? g0 : 0) * D + cc;
-            const half* v1 = V_bh + (size_t)(g1 < N ? g1 : 0) * D + cc;
-            cp_async_16(sbase + k0_off, k0, (g0 < N) ? 16 : 0);
-            cp_async_16(sbase + k1_off, k1, (g1 < N) ? 16 : 0);
-            cp_async_16(sbase + v0_off, v0, (g0 < N) ? 16 : 0);
-            cp_async_16(sbase + v1_off, v1, (g1 < N) ? 16 : 0);
+    // Issue cp.async for the K/V tile at kv into stage buffer s.
+    // Layout inside a stage: K rows [0,BC) then V rows [0,BC), stride LDS.
+    auto issue_kv = [&](int s, int kv) {
+        half* base = smem + s * STAGE;
+        #pragma unroll
+        for (int c = tid; c < CHUNKS; c += NWARPS * 32) {
+            int mat = c / (CHUNKS / 2);          // 0 = K, 1 = V
+            int rem = c % (CHUNKS / 2);
+            int r = rem / (D / 8);
+            int cc = (rem % (D / 8)) * 8;        // column offset in halves
+            int gr = kv + r;
+            const half* src = (mat == 0 ? K_bh : V_bh) + (size_t)(gr < N ? gr : 0) * D + cc;
+            uint32_t dst = smem_u32(base + (mat * BC + r) * LDS + cc);
+            cp_async_16(dst, src, (gr < N) ? 16 : 0);
         }
         cp_async_commit();
     };
 
-    // ---- Kick off K/V stage 0 while staging Q into the other stage ----
-    issue_kv_fast(cur_base, 0);
+    // ---- Kick off K/V stage 0 while staging Q into stage-1 space ----
+    issue_kv(0, 0);
     {
         half (*sQ)[LDS] = reinterpret_cast<half(*)[LDS]>(smem + STAGE);
         const int total_h2 = BR * D / 2;
         for (int i = tid; i < total_h2; i += blockDim.x) {
             int flat = i * 2;
             int r = flat / D, c = flat % D;
-            if constexpr (FULL_TILES) {
-                // N % BR == 0 guarantees every Q row in this block is valid.
-                *reinterpret_cast<half2*>(&sQ[r][c]) =
-                    *reinterpret_cast<const half2*>(&Q_bh[(size_t)(q_block + r) * D + c]);
-            } else {
-                int gr = q_block + r;
-                half2 val = (gr < N)
-                    ? *reinterpret_cast<const half2*>(&Q_bh[(size_t)gr * D + c])
-                    : __float2half2_rn(0.0f);
-                *reinterpret_cast<half2*>(&sQ[r][c]) = val;
-            }
+            int gr = q_block + r;
+            half2 val = (gr < N)
+                ? *reinterpret_cast<const half2*>(&Q_bh[(size_t)gr * D + c])
+                : __float2half2_rn(0.0f);
+            *reinterpret_cast<half2*>(&sQ[r][c]) = val;
         }
         __syncthreads();
     }
@@ -201,12 +158,7 @@ fa3fp16a_fwd_kernel(
             ldmatrix_x4(qf[ks][0], qf[ks][1], qf[ks][2], qf[ks][3], addr);
         }
     }
-    __syncthreads();
-
-    const uint32_t qk_lane_base =
-        (uint32_t)((lane & 7) * LDS + ((lane < 8) ? 0 : 8)) * sizeof(half);
-    const uint32_t pv_lane_base =
-        (uint32_t)((BC + (lane & 15)) * LDS) * sizeof(half);
+    __syncthreads();   // Q fragments in registers; stage-1 buffer now free for K/V
 
     float o_acc[NTILES_O][4];
     #pragma unroll
@@ -224,46 +176,42 @@ fa3fp16a_fwd_kernel(
         const bool has_next = (i + 1) < nblocks;
 
         if (has_next) {
-            issue_kv_fast(next_base, kv + BC);
-            cp_async_wait<1>();
+            issue_kv((i + 1) & 1, kv + BC);
+            cp_async_wait<1>();          // stage i complete; stage i+1 stays in flight
         } else {
             cp_async_wait<0>();
         }
-        __syncthreads();
+        __syncthreads();                 // stage i visible to all warps
 
-        const uint32_t qk_base = cur_base + qk_lane_base;
-        const uint32_t pv_base = cur_base + pv_lane_base;
+        half (*sK)[LDS] = reinterpret_cast<half(*)[LDS]>(smem + (i & 1) * STAGE);
+        half (*sV)[LDS] = reinterpret_cast<half(*)[LDS]>(smem + (i & 1) * STAGE + BC * LDS);
 
-        // ---- S = Q K^T (FP16 ACCUMULATE, then unpack to fp32) ----
+        // ---- S = Q K^T ----
         float s[NTILES_S][4];
-        #pragma unroll
-        for (int t = 0; t < NTILES_S; t++) {
-            uint32_t sh0 = 0, sh1 = 0;
+        {
+            int br = lane % 8;
+            int bk = (lane < 8) ? 0 : 8;
             #pragma unroll
-            for (int ks = 0; ks < KSLICES; ks++) {
-                uint32_t b0, b1;
-                ldmatrix_x2(b0, b1,
-                    qk_base + (uint32_t)(t * 8) * ROW_BYTES
-                            + (uint32_t)(ks * 16) * sizeof(half));
-                mma_m16n8k16_f16acc(sh0, sh1,
-                                    qf[ks][0], qf[ks][1], qf[ks][2], qf[ks][3], b0, b1);
+            for (int t = 0; t < NTILES_S; t++) {
+                s[t][0] = s[t][1] = s[t][2] = s[t][3] = 0.0f;
+                #pragma unroll
+                for (int ks = 0; ks < KSLICES; ks++) {
+                    uint32_t b0, b1;
+                    ldmatrix_x2(b0, b1, smem_u32(&sK[t * 8 + br][ks * 16 + bk]));
+                    mma_m16n8k16(s[t][0], s[t][1], s[t][2], s[t][3],
+                                 qf[ks][0], qf[ks][1], qf[ks][2], qf[ks][3], b0, b1);
+                }
+                #pragma unroll
+                for (int j = 0; j < 4; j++) s[t][j] *= scale_log2;
             }
-            float2 f01 = __half22float2(*reinterpret_cast<half2*>(&sh0));
-            float2 f23 = __half22float2(*reinterpret_cast<half2*>(&sh1));
-            s[t][0] = f01.x * scale_log2;
-            s[t][1] = f01.y * scale_log2;
-            s[t][2] = f23.x * scale_log2;
-            s[t][3] = f23.y * scale_log2;
         }
 
-        if constexpr (!FULL_TILES) {
-            if (kv + BC > N) {
-                #pragma unroll
-                for (int t = 0; t < NTILES_S; t++) {
-                    int col0 = kv + t * 8 + 2 * (lane % 4);
-                    if (col0 >= N)     { s[t][0] = -INFINITY; s[t][2] = -INFINITY; }
-                    if (col0 + 1 >= N) { s[t][1] = -INFINITY; s[t][3] = -INFINITY; }
-                }
+        if (kv + BC > N) {
+            #pragma unroll
+            for (int t = 0; t < NTILES_S; t++) {
+                int col0 = kv + t * 8 + 2 * (lane % 4);
+                if (col0 >= N)     { s[t][0] = -INFINITY; s[t][2] = -INFINITY; }
+                if (col0 + 1 >= N) { s[t][1] = -INFINITY; s[t][3] = -INFINITY; }
             }
         }
 
@@ -319,21 +267,20 @@ fa3fp16a_fwd_kernel(
             o_acc[t][2] *= alpha_hi;
             o_acc[t][3] *= alpha_hi;
         }
-        #pragma unroll
-        for (int t = 0; t < NTILES_O; t++) {
+        {
+            int vr = lane % 16;
             #pragma unroll
-            for (int ks = 0; ks < KSLICES_PV; ks++) {
-                uint32_t b0, b1;
-                ldmatrix_x2_trans(b0, b1,
-                    pv_base + (uint32_t)(ks * 16) * ROW_BYTES
-                            + (uint32_t)(t * 8) * sizeof(half));
-                mma_m16n8k16(o_acc[t][0], o_acc[t][1], o_acc[t][2], o_acc[t][3],
-                             pf[ks][0], pf[ks][1], pf[ks][2], pf[ks][3], b0, b1);
+            for (int t = 0; t < NTILES_O; t++) {
+                #pragma unroll
+                for (int ks = 0; ks < KSLICES_PV; ks++) {
+                    uint32_t b0, b1;
+                    ldmatrix_x2_trans(b0, b1, smem_u32(&sV[ks * 16 + vr][t * 8]));
+                    mma_m16n8k16(o_acc[t][0], o_acc[t][1], o_acc[t][2], o_acc[t][3],
+                                 pf[ks][0], pf[ks][1], pf[ks][2], pf[ks][3], b0, b1);
+                }
             }
         }
-        __syncthreads();
-
-        uint32_t tmp = cur_base; cur_base = next_base; next_base = tmp;
+        __syncthreads();   // all warps done with stage i before its buffer is re-issued
     }
 
     const float inv_lo = 1.0f / l_lo;
@@ -345,28 +292,25 @@ fa3fp16a_fwd_kernel(
     #pragma unroll
     for (int t = 0; t < NTILES_O; t++) {
         int col = t * 8 + cbase;
-        if (FULL_TILES || r_lo < N) {
+        if (r_lo < N) {
             half2 v = __floats2half2_rn(o_acc[t][0] * inv_lo, o_acc[t][1] * inv_lo);
             *reinterpret_cast<half2*>(&O_bh[(size_t)r_lo * D + col]) = v;
         }
-        if (FULL_TILES || r_hi < N) {
+        if (r_hi < N) {
             half2 v = __floats2half2_rn(o_acc[t][2] * inv_hi, o_acc[t][3] * inv_hi);
             *reinterpret_cast<half2*>(&O_bh[(size_t)r_hi * D + col]) = v;
         }
     }
-    if constexpr (WRITE_L) {
-        if (lane % 4 == 0) {
-            float* L_bh = L + (size_t)bh * N;
-            if (FULL_TILES || r_lo < N) L_bh[r_lo] = m_lo * LN2f + logf(l_lo);
-            if (FULL_TILES || r_hi < N) L_bh[r_hi] = m_hi * LN2f + logf(l_hi);
-        }
+    if (WRITE_L && lane % 4 == 0) {
+        if (r_lo < N) L_bh[r_lo] = m_lo * LN2f + logf(l_lo);
+        if (r_hi < N) L_bh[r_hi] = m_hi * LN2f + logf(l_hi);
     }
 }
 
 // ============================================================
 // Host launchers
 // ============================================================
-static std::pair<torch::Tensor, torch::Tensor> fa3fp16a_forward_impl(
+static std::pair<torch::Tensor, torch::Tensor> mma_db_forward_impl(
     torch::Tensor Q, torch::Tensor K, torch::Tensor V, bool want_L)
 {
     TORCH_CHECK(Q.is_cuda() && K.is_cuda() && V.is_cuda(), "Q/K/V must be CUDA tensors");
@@ -408,31 +352,30 @@ static std::pair<torch::Tensor, torch::Tensor> fa3fp16a_forward_impl(
             L_ptr,
             N);
     };
-    const bool full_tiles = (N % BR == 0) && (N % BC == 0);
-    if (want_L) {
-        if (full_tiles) launch(fa3fp16a_fwd_kernel<HD, true, true>);
-        else            launch(fa3fp16a_fwd_kernel<HD, true, false>);
-    } else {
-        if (full_tiles) launch(fa3fp16a_fwd_kernel<HD, false, true>);
-        else            launch(fa3fp16a_fwd_kernel<HD, false, false>);
-    }
+    if (want_L) launch(mma_db_fwd_kernel<HD, true>);
+    else        launch(mma_db_fwd_kernel<HD, false>);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 
     return {O_h.reshape({B, H, N, D}),
             want_L ? L.reshape({B, H, N}) : torch::Tensor()};
 }
 
-std::vector<torch::Tensor> fa3fp16a_forward(torch::Tensor Q, torch::Tensor K, torch::Tensor V) {
-    auto [O, L] = fa3fp16a_forward_impl(Q, K, V, /*want_L=*/true);
+std::vector<torch::Tensor> mma_db_forward(torch::Tensor Q, torch::Tensor K, torch::Tensor V) {
+    auto [O, L] = mma_db_forward_impl(Q, K, V, /*want_L=*/true);
     return {O, L};
 }
 
-torch::Tensor fa3fp16a_forward_only(torch::Tensor Q, torch::Tensor K, torch::Tensor V) {
-    auto [O, L] = fa3fp16a_forward_impl(Q, K, V, /*want_L=*/false);
+torch::Tensor mma_db_forward_only(torch::Tensor Q, torch::Tensor K, torch::Tensor V) {
+    auto [O, L] = mma_db_forward_impl(Q, K, V, /*want_L=*/false);
     return O;
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-    m.def("forward", &fa3fp16a_forward, "ABLATION: fp16-accumulate QK forward (returns O half, L float)");
-    m.def("forward_only", &fa3fp16a_forward_only, "ABLATION: fp16-accumulate QK forward, true O-only");
+    m.def("forward", &mma_db_forward, "MMA forward + cp.async double buffering: returns O half, L float");
+    // forward_only is TRUE O-only: WRITE_L=false template skips the epilogue
+    // logf + L stores and the host skips the L allocation entirely.
+    // CAVEAT for benchmarks: SDPA-Flash always computes softmax_lse, so
+    // O-only does strictly LESS work than SDPA -- use forward() (with L)
+    // numbers for headline comparisons.
+    m.def("forward_only", &mma_db_forward_only, "MMA forward (cp.async), true O-only (no L compute/alloc)");
 }

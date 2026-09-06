@@ -1,4 +1,4 @@
-"""FA3 db_full_intl (softmax/PV interleave): correctness vs half-cast FP32 reference.
+"""MMA db_full_intl (softmax/PV interleave): correctness vs half-cast FP32 reference.
 
 Also cross-checks bit-identity against db_full (the interleave only reorders
 ISSUE order; per-element scalar op order is unchanged, so outputs should be
@@ -8,11 +8,11 @@ import torch
 from torch.utils.cpp_extension import load
 
 FLAGS = ["-O3", "--use_fast_math", "-gencode=arch=compute_89,code=sm_89"]
-mod = load(name="flash_attn_fa3_db_full_intl",
-           sources=["cuda/flash_attn_fa3_db_full_intl.cu"],
+mod = load(name="flash_attn_mma_db_full_intl",
+           sources=["cuda/flash_attn_mma_db_full_intl.cu"],
            extra_cuda_cflags=FLAGS, verbose=False)
-mod_full = load(name="flash_attn_fa3_db_full",
-                sources=["cuda/flash_attn_fa3_db_full.cu"],
+mod_full = load(name="flash_attn_mma_db_full",
+                sources=["cuda/flash_attn_mma_db_full.cu"],
                 extra_cuda_cflags=FLAGS, verbose=False)
 print(f"so: {mod.__file__}")
 print(f"so: {mod_full.__file__}")
@@ -59,7 +59,7 @@ def test_config(B, H, N, D, device="cuda", dtype=torch.float32, amp=1.0):
 
 def main():
     print("=" * 96)
-    print("FA3 db_full_intl (softmax/PV interleave) Correctness Test")
+    print("MMA db_full_intl (softmax/PV interleave) Correctness Test")
     print("=" * 96)
     configs = [
         (1, 1, 64, 64), (1, 1, 128, 64), (2, 4, 256, 64), (2, 8, 512, 64),

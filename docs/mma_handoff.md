@@ -1,12 +1,12 @@
-# fa3 (3차 커널) 핸드오프 — 2026-07-07
+# mma.sync 커널 핸드오프 — 2026-07-07
 
 ## 0. 결과 요약 (전부 검증된 수치)
 
 RTX 4060 Ti, B=1 H=8 D=64 FP16 non-causal, torch 2.10.0+cu128, CUDA 12.8.
 5회 반복(측정 순서 rep마다 회전) 중앙값, CUDA event 타이밍, 클럭 burn-in 후 측정
-(`bench/bench_fa3_final.py`).
+(`bench/bench_mma_final.py`).
 
-**최종 커널 = fa3-db-full (freeze).** 확정 headline — `bench/bench_fa3_headline.py`,
+**최종 커널 = mma-db-full (freeze).** 확정 headline — `bench/bench_mma_headline.py`,
 **10-run paired median**, 양쪽 다 forward()+L (SDPA도 softmax_lse 항상 계산):
 
 | N | db_full+L (ms) | SDPA-Flash (ms) | paired median gap |
@@ -26,13 +26,13 @@ RTX 4060 Ti, B=1 H=8 D=64 FP16 non-causal, torch 2.10.0+cu128, CUDA 12.8.
 > scalar-PV baseline 대비 약 3.6배 개선됐다.
 
 고정 문구 (ablation 경계, 이대로만):
-> Final mainline: fa3-db-full, FP16 input / FP32 accumulate.
+> Final mainline: mma-db-full, FP16 input / FP32 accumulate.
 > Ablation only: fp16-acc QK.
 > fp16-acc QK improves N=4096 latency by 21–24%, but changes the numerical
 > contract and fails robustness as logit amplitude increases. It is not used
 > for the SDPA comparison headline.
 
-- 개선 사슬 (N=4096): fa2 ~3.2ms → fa3 1.04 → db 0.92 (**fa2→db ~3.4x**) → addr 0.89
+- 개선 사슬 (N=4096): fa2 ~3.2ms → mma 1.04 → db 0.92 (**fa2→db ~3.4x**) → addr 0.89
   → **full 0.873 (fa2→full ~3.6–3.7x)** — 배수 인용 시 기준 커널 명시할 것
 - 달성 처리량 N=4096: 34.4 GFLOP / 0.873ms ≈ **39 TFLOPS**
 
@@ -68,23 +68,23 @@ ISETP 20→6, SEL 5→1, IMAD 54→48, HMMA 32 불변. (히스토그램류 수�
 | 파일 | 내용 |
 |---|---|
 | `cuda/mma_probe.cu` + `tests/test_mma_probe.py` | mma.sync/ldmatrix 레이아웃 실측 검증 (3/3 PASS). 커널 수정 전 반드시 재실행 |
-| `cuda/flash_attn_fa3.cu` | v1: mma.sync + 레지스터 상주 softmax. REG 80, spill 0, smem 9KB |
-| `cuda/flash_attn_fa3_db.cu` | v2(최종): v1 + cp.async 2-stage K/V 더블버퍼. REG 95, spill 0, smem 18KB |
-| `tests/test_fa3.py`, `tests/test_fa3_db.py` | correctness 11 configs |
-| `cuda/flash_attn_fa3_db_addr.cu` + `tests/test_fa3_db_addr.py` | db + address strength-reduction (§4-⑥). REG 96, N=4096 ~0.89ms |
-| `cuda/flash_attn_fa3_db_full.cu` + `tests/test_fa3_db_full.py` | **최종 (freeze)**: db_addr + FULL_TILES 특수화 (§4-⑦). N%64==0이면 predicate-free 경로, 아니면 db_addr와 동일한 guarded 경로. full+L REG 95, N=4096 0.873ms |
-| `bench/bench_fa3_headline.py` | **headline 확정용**: db_full+L vs SDPA, 10-run paired median. README/논문 수치는 여기서만 |
-| `cuda/flash_attn_fa3_bc64.cu` + `tests/test_fa3_bc64.py` | BC=64 negative ablation (5% 느림, §4-③). setup.py 미등록, JIT 로드 |
-| `cuda/flash_attn_fa3_db_full_intl.cu` + `tests/test_fa3_db_full_intl.py` + `bench/bench_fa3_intl_paired.py` | softmax/PV interleave negative ablation (§4-⑧, paired -0.6~-1%). setup.py 미등록 |
-| `cuda/flash_attn_fa3_fp16acc.cu` + `tests/test_fa3_fp16acc.py` + `bench/bench_fa3_fp16acc_paired.py` | **fp16-acc QK ablation** (§4-⑨, +22% but 정확도 붕괴 특성 포함). headline 금지. setup.py 미등록 |
-| `bench/bench_fa3_forward.py` | 3-way 벤치 (개발용) |
-| `bench/bench_fa3_final.py` | 최종 벤치 (분산 통제 프로토콜, 순서 회전) |
-| `bench/bench_fa3_variants.py` | db+L / db O-only / bc64 / SDPA 4-way 비교 |
-| `bench/profile_fa3_once.py` | ncu 단일 런치 타겟 |
+| `cuda/flash_attn_mma.cu` | v1: mma.sync + 레지스터 상주 softmax. REG 80, spill 0, smem 9KB |
+| `cuda/flash_attn_mma_db.cu` | v2(최종): v1 + cp.async 2-stage K/V 더블버퍼. REG 95, spill 0, smem 18KB |
+| `tests/test_mma.py`, `tests/test_mma_db.py` | correctness 11 configs |
+| `cuda/flash_attn_mma_db_addr.cu` + `tests/test_mma_db_addr.py` | db + address strength-reduction (§4-⑥). REG 96, N=4096 ~0.89ms |
+| `cuda/flash_attn_mma_db_full.cu` + `tests/test_mma_db_full.py` | **최종 (freeze)**: db_addr + FULL_TILES 특수화 (§4-⑦). N%64==0이면 predicate-free 경로, 아니면 db_addr와 동일한 guarded 경로. full+L REG 95, N=4096 0.873ms |
+| `bench/bench_mma_headline.py` | **headline 확정용**: db_full+L vs SDPA, 10-run paired median. README/논문 수치는 여기서만 |
+| `cuda/flash_attn_mma_bc64.cu` + `tests/test_mma_bc64.py` | BC=64 negative ablation (5% 느림, §4-③). setup.py 미등록, JIT 로드 |
+| `cuda/flash_attn_mma_db_full_intl.cu` + `tests/test_mma_db_full_intl.py` + `bench/bench_mma_intl_paired.py` | softmax/PV interleave negative ablation (§4-⑧, paired -0.6~-1%). setup.py 미등록 |
+| `cuda/flash_attn_mma_fp16acc.cu` + `tests/test_mma_fp16acc.py` + `bench/bench_mma_fp16acc_paired.py` | **fp16-acc QK ablation** (§4-⑨, +22% but 정확도 붕괴 특성 포함). headline 금지. setup.py 미등록 |
+| `bench/bench_mma_forward.py` | 3-way 벤치 (개발용) |
+| `bench/bench_mma_final.py` | 최종 벤치 (분산 통제 프로토콜, 순서 회전) |
+| `bench/bench_mma_variants.py` | db+L / db O-only / bc64 / SDPA 4-way 비교 |
+| `bench/profile_mma_once.py` | ncu 단일 런치 타겟 |
 | `bench/sass_histo.sh` | SASS opcode 히스토그램 + HMMA 간격 분석 |
 
 빌드: pip 없이 `torch.utils.cpp_extension.load()` JIT (테스트/벤치 스크립트가 알아서 빌드).
-`setup.py`에도 `flash_attn_fa3`, `flash_attn_fa3_db` 모듈 추가됨.
+`setup.py`에도 `flash_attn_mma`, `flash_attn_mma_db` 모듈 추가됨.
 
 ## 2. 왜 이 설계인가 (5W1H)
 
@@ -114,7 +114,7 @@ shared는 K/V 타일만: Q는 스테이징 버퍼에 한 번 올려 ldmatrix로 
 tail 행은 src-size 0 → 하드웨어 zero-fill. Q 스테이징은 stage-1 버퍼 자리에서 수행하고
 그동안 stage-0에 kv0 로드가 이미 날아감. 효과: N=4096 1.044 → 0.928ms (-11%).
 
-## 3. ncu 진단 (fa3-db, N=4096)
+## 3. ncu 진단 (mma-db, N=4096)
 
 - DRAM 4.3%, **L2 히트 98.5%** (K+V 2MB가 L2 32MB 상주) → 메모리 병목 아님
 - spill 0, divergence 없음 (31.99 active threads/warp)
@@ -127,16 +127,16 @@ tail 행은 src-size 0 → 하드웨어 zero-fill. Q 스테이징은 stage-1 버
 | # | 시도 | 결과 | 판정 |
 |---|---|---|---|
 | ① | forward_only 진짜 O-only (WRITE_L 템플릿, L 할당도 skip) | N=4096: 0.9254 vs db+L 0.9289ms (~0.4%) | 노이즈 수준. L 쓰기는 원래 공짜였음 (BH·N번 logf+store vs O(N²) 메인루프). **벤치 headline은 forward(+L) 사용** — SDPA는 lse 무조건 계산하므로 O-only 비교는 우리가 일 덜 하는 것 |
-| ③ | BC=64 커널 (`flash_attn_fa3_bc64.cu`) | REG 140 spill 0, smem 36.9KB → 2블록/SM (occ 16.7%). N=4096 **0.968ms, db 대비 5% 느림** | **기각.** KV루프/sync 절반 < occupancy 손실. BC=32 유지. negative ablation으로 기록. correctness는 22/22 통과 |
+| ③ | BC=64 커널 (`flash_attn_mma_bc64.cu`) | REG 140 spill 0, smem 36.9KB → 2블록/SM (occ 16.7%). N=4096 **0.968ms, db 대비 5% 느림** | **기각.** KV루프/sync 절반 < occupancy 손실. BC=32 유지. negative ablation으로 기록. correctness는 22/22 통과 |
 | ④ | SASS 리듬 분석 (`bench/sass_histo.sh`) | HMMA 64개 대비 **정수 연산 ~815개** (IMAD 298, LEA 181, SHF 136, IADD3 131, LOP3 69). float 스칼라 ~250, MUFU 41. HMMA 간격: mma 체인 내부 4-10, **반복당 ~318명령 HMMA-free 구간 1개** (softmax+pack+cp.async 발행+주소 재계산) | **범인은 exp2f가 아니라 정수 주소 연산** (HMMA당 int ~13개). ldmatrix 주소가 `(i&1)*STAGE`에서 매 반복 풀 재계산됨 |
 
-| ⑥ | **주소 strength-reduction** (`flash_attn_fa3_db_addr.cu`): issue_kv 스레드당 4-copy 고정형(오프셋 프리컴퓨트), 스테이지 토글 = base 포인터 swap (XOR 금지 — STAGE_BYTES 0x2400이 offset bit와 겹침), ldmatrix 주소 = cur_base + 상수 | **REG 96** (95→96, ±0; 초기 "80" 기록은 스테일 빌드 오독 — cuobjdump 재검증으로 정정) spill 0, SASS 정수 연산 ~58%↓ (IMAD 298→101, LEA 181→76), HMMA 간격 4-10→2-4. N=4096 **0.878~0.893ms, db 대비 -4~5%, SDPA 대비 1.05~1.06x** | **채택. 새 최종 커널.** 이득은 occupancy가 아니라 순수 명령 수 감소에서 나옴 (5블록 캡 동일). correctness 21/21, diff는 db와 완전 동일 |
+| ⑥ | **주소 strength-reduction** (`flash_attn_mma_db_addr.cu`): issue_kv 스레드당 4-copy 고정형(오프셋 프리컴퓨트), 스테이지 토글 = base 포인터 swap (XOR 금지 — STAGE_BYTES 0x2400이 offset bit와 겹침), ldmatrix 주소 = cur_base + 상수 | **REG 96** (95→96, ±0; 초기 "80" 기록은 스테일 빌드 오독 — cuobjdump 재검증으로 정정) spill 0, SASS 정수 연산 ~58%↓ (IMAD 298→101, LEA 181→76), HMMA 간격 4-10→2-4. N=4096 **0.878~0.893ms, db 대비 -4~5%, SDPA 대비 1.05~1.06x** | **채택. 새 최종 커널.** 이득은 occupancy가 아니라 순수 명령 수 감소에서 나옴 (5블록 캡 동일). correctness 21/21, diff는 db와 완전 동일 |
 
-| ⑦ | **FULL_TILES 특수화** (`flash_attn_fa3_db_full.cu`): `N%BR==0 && N%BC==0`일 때 호스트가 predicate-free 인스턴스로 디스패치 — cp.async 가드/tail 마스크/epilogue bounds 전부 컴파일 아웃. guarded 경로는 db_addr와 동일 | 함수 단위 SASS(+L): **ISETP 20→6, SEL 5→1, IMAD 54→48** (HMMA 32 불변). full+L REG 95, spill 0. addr 대비 -3~6% | **채택. 최종 커널 (freeze).** 19/19 correctness (full/guarded 양 경로), diff 동일. 확정 수치는 §0 headline 참조 |
+| ⑦ | **FULL_TILES 특수화** (`flash_attn_mma_db_full.cu`): `N%BR==0 && N%BC==0`일 때 호스트가 predicate-free 인스턴스로 디스패치 — cp.async 가드/tail 마스크/epilogue bounds 전부 컴파일 아웃. guarded 경로는 db_addr와 동일 | 함수 단위 SASS(+L): **ISETP 20→6, SEL 5→1, IMAD 54→48** (HMMA 32 불변). full+L REG 95, spill 0. addr 대비 -3~6% | **채택. 최종 커널 (freeze).** 19/19 correctness (full/guarded 양 경로), diff 동일. 확정 수치는 §0 headline 참조 |
 
-| ⑧ | **softmax/PV interleave** (`flash_attn_fa3_db_full_intl.cu`): slice별 exp+pack→PV mma 발행 순서 재배열, rs 셔플/l/m 갱신은 마지막 HMMA와 오버랩되게 지연. 수학 순서 불변 → **db_full과 비트 일치 확인** (19/19) | REG 94/LOCAL 0 (통과)였으나 **10-rep paired median: N=2048 -1.02%, N=4096 -0.61% — 오히려 느림** | **기각** (사전 kill condition: <1% 개선). 해석: ptxas가 이미 스칼라를 HMMA 사이에 스케줄링 중 — 소스 레벨 재배열은 방해만 됨. negative ablation |
+| ⑧ | **softmax/PV interleave** (`flash_attn_mma_db_full_intl.cu`): slice별 exp+pack→PV mma 발행 순서 재배열, rs 셔플/l/m 갱신은 마지막 HMMA와 오버랩되게 지연. 수학 순서 불변 → **db_full과 비트 일치 확인** (19/19) | REG 94/LOCAL 0 (통과)였으나 **10-rep paired median: N=2048 -1.02%, N=4096 -0.61% — 오히려 느림** | **기각** (사전 kill condition: <1% 개선). 해석: ptxas가 이미 스칼라를 HMMA 사이에 스케줄링 중 — 소스 레벨 재배열은 방해만 됨. negative ablation |
 
-| ⑨ | **fp16-acc QK ablation** (`flash_attn_fa3_fp16acc.cu`): QK mma만 `m16n8k16.f16.f16.f16.f16` (컨슈머 Ada TC 이슈레이트 2배), S는 mma 직후 fp32 언팩, softmax/PV는 불변. f16 C-fragment 레이아웃은 `mma_probe.probe_qk_f16acc`로 사전 실측 | **+21~24% (10-rep paired, N=1024/2048/4096), N=4096 0.873→0.688ms (~50 TFLOPS)**. 정확도: amp=1에서 O오차 4e-4~3e-3 (사용가능), **amp=4부터 붕괴 (0.27), amp=16에서 18.1**. REG 92-94, spill 0 | **논문 ablation 전용 — mainline/headline 금지** (SDPA는 fp32-acc, 계약 다름). 서사: "fp32-acc의 비용 = 런타임 ~22%, 포기하면 로짓 O(10)부터 softmax 붕괴 — 프로덕션 커널이 fp32-acc를 유지하는 이유" |
+| ⑨ | **fp16-acc QK ablation** (`flash_attn_mma_fp16acc.cu`): QK mma만 `m16n8k16.f16.f16.f16.f16` (컨슈머 Ada TC 이슈레이트 2배), S는 mma 직후 fp32 언팩, softmax/PV는 불변. f16 C-fragment 레이아웃은 `mma_probe.probe_qk_f16acc`로 사전 실측 | **+21~24% (10-rep paired, N=1024/2048/4096), N=4096 0.873→0.688ms (~50 TFLOPS)**. 정확도: amp=1에서 O오차 4e-4~3e-3 (사용가능), **amp=4부터 붕괴 (0.27), amp=16에서 18.1**. REG 92-94, spill 0 | **논문 ablation 전용 — mainline/headline 금지** (SDPA는 fp32-acc, 계약 다름). 서사: "fp32-acc의 비용 = 런타임 ~22%, 포기하면 로짓 O(10)부터 softmax 붕괴 — 프로덕션 커널이 fp32-acc를 유지하는 이유" |
 
 클린업 (2026-07-07 밤): ① `WRITE_L=false`에서 L 포인터 산술 제거 (`if constexpr` 안으로) — db_addr/db_full 적용, 비트일치 재확인 ② setup.py에 db_addr/db_full 등록 ③ 모든 벤치가 측정한 .so 경로 출력 (스테일 바이너리 오독 방지)
 
@@ -151,7 +151,7 @@ tail 행은 src-size 0 → 하드웨어 zero-fill. Q 스테이징은 stage-1 버
 2. smem swizzle로 PAD 제거 (18.4→16KB) + REG ≤85 → 6블록/SM. full+L(95)은 10개 초과.
    1번과 같은 레지스터 벽. 난이도 중.
 3. ~~fp16 누산 QK~~ → **⑨로 완료** (ablation 전용 확정).
-4. causal masking, D=128, backward를 fa3 구조로.
+4. causal masking, D=128, backward를 mma 구조로.
 
 수확체감 명확함: 남은 갭이 동일 런 ~2%라, 여기서부턴 공학적 이득보다 논문 서사 가치로
 판단하는 게 맞음.
@@ -175,7 +175,7 @@ tail 행은 src-size 0 → 하드웨어 zero-fill. Q 스테이징은 stage-1 버
 - `cuda/flash_attn_kernel.cu` 수정 금지. `flash_attn_wmma.cu` 보존.
 - "SDPA보다 빠르다" 금지. 39.16x는 메모리 절약이지 speedup 아님.
 - 시간 speedup은 naive 대비만.
-- 커널 수정 시 `tests/test_mma_probe.py` → `tests/test_fa3*.py` → 벤치 순서로 재검증.
+- 커널 수정 시 `tests/test_mma_probe.py` → `tests/test_mma*.py` → 벤치 순서로 재검증.
 
 ## 6. 이 작업의 위치
 

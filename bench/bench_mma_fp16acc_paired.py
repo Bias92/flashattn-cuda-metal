@@ -7,9 +7,9 @@ import torch
 from torch.utils.cpp_extension import load
 
 FLAGS = ["-O3", "--use_fast_math", "-gencode=arch=compute_89,code=sm_89"]
-mod_full = load(name="flash_attn_fa3_db_full", sources=["cuda/flash_attn_fa3_db_full.cu"],
+mod_full = load(name="flash_attn_mma_db_full", sources=["cuda/flash_attn_mma_db_full.cu"],
                 extra_cuda_cflags=FLAGS, verbose=False)
-mod_a = load(name="flash_attn_fa3_fp16acc", sources=["cuda/flash_attn_fa3_fp16acc.cu"],
+mod_a = load(name="flash_attn_mma_fp16acc", sources=["cuda/flash_attn_mma_fp16acc.cu"],
              extra_cuda_cflags=FLAGS, verbose=False)
 for _m in (mod_full, mod_a):
     print(f"so: {_m.__file__}")

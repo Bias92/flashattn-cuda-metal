@@ -2,7 +2,7 @@
 // mma_probe.cu — layout validation for mma.sync.m16n8k16 + ldmatrix
 //
 // Purpose: empirically verify, on real hardware, every register-layout
-// assumption the fa3 kernel relies on BEFORE building the kernel:
+// assumption the mma kernel relies on BEFORE building the kernel:
 //   1. A operand:  ldmatrix.x4 on row-major Q-style storage
 //   2. B operand (QK):  ldmatrix.x2 (no trans) on K-style storage [n][k]
 //   3. B operand (PV):  ldmatrix.x2.trans on V-style storage [k][n]

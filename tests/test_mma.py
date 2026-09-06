@@ -1,13 +1,13 @@
 """
-FA3 (mma.sync) correctness test vs FP32 naive reference.
+MMA (mma.sync) correctness test vs FP32 naive reference.
 Inputs are FP32 randn converted to half inside the module -> FP16 tolerances.
 """
 import torch
 from torch.utils.cpp_extension import load
 
 mod = load(
-    name="flash_attn_fa3",
-    sources=["cuda/flash_attn_fa3.cu"],
+    name="flash_attn_mma",
+    sources=["cuda/flash_attn_mma.cu"],
     extra_cuda_cflags=["-O3", "--use_fast_math", "-gencode=arch=compute_89,code=sm_89"],
     verbose=False,
 )
@@ -35,16 +35,16 @@ def test_config(B, H, N, D, device="cuda", dtype=torch.float32, amp=1.0):
     # (.half() is a no-op for fp16 direct inputs.)
     Qh, Kh, Vh = Q.half().float(), K.half().float(), V.half().float()
     O_ref, L_ref = naive_attention(Qh, Kh, Vh)
-    O_fa3, L_fa3 = mod.forward(Q, K, V)
-    O_fa3 = O_fa3.float()
+    O_mma, L_mma = mod.forward(Q, K, V)
+    O_mma = O_mma.float()
 
-    O_diff = (O_fa3 - O_ref).abs().max().item()
-    L_diff = (L_fa3 - L_ref).abs().max().item()
+    O_diff = (O_mma - O_ref).abs().max().item()
+    L_diff = (L_mma - L_ref).abs().max().item()
 
     # amp>1 blows up |L| ~ amp^2; keep the absolute check on O (bounded by
     # softmax) and rely on rtol for L in stress configs.
-    O_pass = torch.allclose(O_fa3, O_ref, atol=2e-3 * max(amp, 1.0), rtol=2e-3)
-    L_pass = torch.allclose(L_fa3, L_ref, atol=2e-3, rtol=1e-3)
+    O_pass = torch.allclose(O_mma, O_ref, atol=2e-3 * max(amp, 1.0), rtol=2e-3)
+    L_pass = torch.allclose(L_mma, L_ref, atol=2e-3, rtol=1e-3)
     ok = O_pass and L_pass
 
     tag = f" dtype={str(dtype).split('.')[-1]}" if dtype != torch.float32 else ""
@@ -59,7 +59,7 @@ def test_config(B, H, N, D, device="cuda", dtype=torch.float32, amp=1.0):
 
 def main():
     print("=" * 80)
-    print("FA3 (mma.sync) Correctness Test")
+    print("MMA (mma.sync) Correctness Test")
     print("=" * 80)
     configs = [
         (1, 1,     1, 64),   # sub-warp-tile N

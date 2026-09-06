@@ -1,12 +1,12 @@
 # flashattn-cuda
 
-I wrote FlashAttention kernels from scratch in CUDA and pushed the forward path
-until it got close to PyTorch's SDPA Flash backend on an RTX 4060 Ti.
+I wrote FlashAttention kernels from scratch in CUDA. The current forward kernel
+uses `mma.sync` and online softmax on an RTX 4060 Ti.
 
 The current best kernel is:
 
 ```text
-cuda/flash_attn_fa3_db_full.cu
+cuda/flash_attn_mma_db_full.cu
 ```
 
 It is still behind SDPA, but the remaining gap is small:
@@ -19,7 +19,7 @@ It is still behind SDPA, but the remaining gap is small:
 
 Tested on RTX 4060 Ti, CUDA 12.8, PyTorch 2.10.0+cu128, B=1, H=8, D=64,
 FP16 input, FP32 accumulate, non-causal forward. The numbers above are 10-run
-paired medians from `bench/bench_fa3_headline.py`.
+paired medians from `bench/bench_mma_headline.py`.
 
 <p align="center">
   <img src="docs/profiling/benchmark_comparison.png" width="720" alt="Forward benchmark">
@@ -36,8 +36,8 @@ So this repo keeps the whole trail:
 |---|---|
 | FP32 baseline | plain tiled FlashAttention forward/backward |
 | WMMA path | first Tensor Core attempt |
-| fa3 | direct `mma.sync`, register softmax, no shared S/P round trip |
-| fa3-db | K/V `cp.async` double buffer |
+| mma | direct `mma.sync`, register softmax, no shared S/P round trip |
+| mma-db | K/V `cp.async` double buffer |
 | db_addr | removed a lot of repeated integer address work |
 | db_full | full-tile fast path for common benchmark sizes |
 
@@ -49,7 +49,7 @@ At `N=4096`, the chain moved from about 3.2 ms to about 0.873 ms.
 
 ## Nsight Compute Snapshot
 
-I also profiled the direct `fa3` kernel and the final `db_full` kernel with
+I also profiled the direct `mma` kernel and the final `db_full` kernel with
 Nsight Compute on the same `N=4096` shape. This is a single profiled launch, so
 it is not the headline benchmark. The event-timed paired benchmark above is the
 latency number I quote.
@@ -58,7 +58,7 @@ The point of this profile is not just "lower time." The final kernel does more
 useful work per cycle after K/V prefetching, address cleanup, and the full-tile
 path.
 
-| Metric | fa3 before | db_full after |
+| Metric | mma before | db_full after |
 |---|---:|---:|
 | Duration | 1.38 ms | 0.987 ms |
 | Compute throughput | 35.18% | 43.32% |
@@ -79,6 +79,7 @@ profiling lesson here: occupancy was not the only score to chase.
 
 The full Nsight Compute reports, text exports, and original uncropped UI
 captures are kept under `docs/profiling/ncu/` and `docs/profiling/ncu_sections/`.
+Archived reports and screenshots retain their original kernel names.
 
 I kept the old Nsight screenshots from the first FP32 kernel too. The old
 screenshots and the current db_full screenshots are different benchmark shapes,
@@ -135,21 +136,19 @@ This is the part I care about most. The final number is not just one lucky
 kernel. I tried the obvious paths, kept the useful ones, and left the dead ends
 in the repo or notes when they explained something.
 
-The headline kernel is still `db_full(+L)`. Rows marked race or ablation are not
-used for the main SDPA comparison.
+The headline kernel is still `db_full(+L)`. Ablations are not used for the main
+SDPA comparison.
 
 | Attempt | What happened | Verdict |
 |---|---|---|
 | FP32 tiled baseline | worked as the reference path, but it was much slower | kept as baseline |
 | WMMA path | first Tensor Core version, useful but still carried too much overhead | superseded |
-| fa3 | direct `mma.sync`, register softmax, no shared S/P round trip | kept in chain |
-| fa3-db | added two-stage K/V `cp.async` | kept in chain |
+| mma | direct `mma.sync`, register softmax, no shared S/P round trip | kept in chain |
+| mma-db | added two-stage K/V `cp.async` | kept in chain |
 | db_addr | removed repeated shared/global address work; SASS integer ops dropped hard | kept in chain |
 | db_full | removed full-tile predicates for N divisible by the tile size | current headline kernel |
-| O-only race path | split loop, last sync removed, N=2048/4096 specialization, `.ca` load path; faster than db_full O-only, but claim-grade SDPA ratios were still 1.0035 at N=2048 and 1.0063 at N=4096 | borderline, not headline |
 | fp16-acc QK | about 21-24% faster, but changes the numerical contract and breaks down on larger logits | ablation only |
 | BC=64 tile | correct, but shared memory footprint cut residency too much | rejected |
-| BC=16 tile | REG 72, LOCAL 0, SHARED 13.8KB, correctness 18/18; still slower because the K/V loop, barriers, and online-softmax updates doubled | rejected |
 | softmax/PV source interleave | correct and nearly bit-identical, but slower in paired runs | rejected |
 | cross-iteration precompute | correct, but the extra live state hurt scheduling more than it helped | rejected |
 | launch bounds, max register count, PAD changes, static N only | no stable win in paired runs | rejected |
@@ -167,11 +166,6 @@ Older FP32 and WMMA trail:
 | 7 | `sO` +1 padding | slower | conflict barely moved, so residual conflict was not from the output accumulator |
 | 8 | `sP` +8 padding | 10.41 ms -> 10.55 ms | store conflict improved, but runtime regressed from shared-memory pressure |
 
-The BC=16 result is a good example of why I do not treat occupancy as a goal by
-itself. It lowered the resource footprint enough to be a 7-block-per-SM
-candidate, but the extra loop and synchronization work was larger than the
-latency-hiding gain.
-
 ## Files
 
 | File | Notes |
@@ -179,29 +173,23 @@ latency-hiding gain.
 | `cuda/flash_attn_kernel.cu` | FP32 baseline. Kept as the comparison anchor. |
 | `cuda/flash_attn_wmma.cu` | older WMMA path |
 | `cuda/mma_probe.cu` | checks `mma.sync` and `ldmatrix` layouts on the GPU |
-| `cuda/flash_attn_fa3.cu` | direct `mma.sync` version |
-| `cuda/flash_attn_fa3_db.cu` | adds `cp.async` double buffering |
-| `cuda/flash_attn_fa3_db_addr.cu` | cuts address generation overhead |
-| `cuda/flash_attn_fa3_db_full.cu` | current best kernel |
-| `cuda/flash_attn_fa3_bc64.cu` | negative ablation |
-| `cuda/flash_attn_fa3_db_full_intl.cu` | negative ablation |
-| `cuda/flash_attn_fa3_fp16acc.cu` | precision trade-off ablation, not headline |
-| `cuda/flash_attn_fa3_race.cu` | O-only API-latency race path, not headline |
-| `cuda/flash_attn_fa3_bc16.cu` | occupancy experiment, rejected |
-| `bench/bench_fa3_headline.py` | canonical db_full(+L) vs SDPA comparison |
-| `bench/bench_fa3_race_paired.py` | O-only race path check |
-| `bench/bench_fa3_bc16.py` | BC=16 paired check |
+| `cuda/flash_attn_mma.cu` | direct `mma.sync` version |
+| `cuda/flash_attn_mma_db.cu` | adds `cp.async` double buffering |
+| `cuda/flash_attn_mma_db_addr.cu` | cuts address generation overhead |
+| `cuda/flash_attn_mma_db_full.cu` | current best kernel |
+| `cuda/flash_attn_mma_bc64.cu` | negative ablation |
+| `cuda/flash_attn_mma_db_full_intl.cu` | negative ablation |
+| `cuda/flash_attn_mma_fp16acc.cu` | precision trade-off ablation, not headline |
+| `bench/bench_mma_headline.py` | canonical db_full(+L) vs SDPA comparison |
 
 ## Correctness
 
-The fa3 line is checked against a half-cast PyTorch reference.
+The mma line is checked against a half-cast PyTorch reference.
 
 | Check | Result |
 |---|---|
 | `tests/test_mma_probe.py` | 3/3 layout probes pass |
-| `tests/test_fa3_db_full.py` | 19/19 correctness configs pass |
-| `tests/test_fa3_race.py` | 18/18 race path configs pass |
-| `tests/test_fa3_bc16.py` | 18/18 BC=16 configs pass |
+| `tests/test_mma_db_full.py` | 19/19 correctness configs pass |
 | non-aligned N | included |
 | direct FP16 input | included |
 | amplified-value stress cases | included |
@@ -231,16 +219,16 @@ Main checks:
 
 ```bash
 python3 tests/test_mma_probe.py
-python3 tests/test_fa3_db_full.py
-python3 bench/bench_fa3_headline.py
+python3 tests/test_mma_db_full.py
+python3 bench/bench_mma_headline.py
 ```
 
 Other useful scripts:
 
 ```bash
-python3 bench/bench_fa3_final.py
-python3 bench/bench_fa3_variants.py
-python3 bench/profile_fa3_once.py
+python3 bench/bench_mma_final.py
+python3 bench/bench_mma_variants.py
+python3 bench/profile_mma_once.py
 ```
 
 Before quoting register counts, rebuild and check the actual `.so`. I have hit
@@ -316,11 +304,11 @@ Jetson AGX Orin notes for the later port:
 
 ## Limits
 
-The current fa3 result is intentionally narrow:
+The current mma result is intentionally narrow:
 
 | Covered | Not covered yet |
 |---|---|
-| forward | fa3 backward |
+| forward | mma backward |
 | non-causal | causal mask |
 | D=64 | D=128 |
 | fixed dense Q/K/V | varlen, dropout, GQA, MQA |

@@ -1,14 +1,14 @@
 """
-Final FA3 benchmark with variance control.
+Final MMA benchmark with variance control.
 
 Protocol:
   - clock burn-in before any measurement
-  - per config: 5 reps of (fa3, fa3-db, sdpa-flash), measurement ORDER
+  - per config: 5 reps of (mma, mma-db, sdpa-flash), measurement ORDER
     ROTATED each rep so DVFS drift hits every implementation in every
     position instead of biasing whichever always ran last
   - CUDA-event timing, per-rep average over `iters` launches
   - report median and (min..max) spread across reps
-  - note: fa3 forward_only returns O only but still computes L internally,
+  - note: mma forward_only returns O only but still computes L internally,
     matching SDPA-Flash which also computes softmax_lse unconditionally
 """
 import torch
@@ -17,9 +17,9 @@ from torch.nn.attention import sdpa_kernel, SDPBackend
 from torch.utils.cpp_extension import load
 
 FLAGS = ["-O3", "--use_fast_math", "-gencode=arch=compute_89,code=sm_89"]
-mod = load(name="flash_attn_fa3", sources=["cuda/flash_attn_fa3.cu"],
+mod = load(name="flash_attn_mma", sources=["cuda/flash_attn_mma.cu"],
            extra_cuda_cflags=FLAGS, verbose=False)
-mod_db = load(name="flash_attn_fa3_db", sources=["cuda/flash_attn_fa3_db.cu"],
+mod_db = load(name="flash_attn_mma_db", sources=["cuda/flash_attn_mma_db.cu"],
               extra_cuda_cflags=FLAGS, verbose=False)
 
 # stale-.so guard: always show exactly which binaries this run measured
@@ -52,7 +52,7 @@ def main():
     B, H, D = 1, 8, 64
     torch.manual_seed(42)
     print("=" * 100)
-    print(f"FA3 final benchmark (B={B}, H={H}, D={D}, FP16, non-causal) — "
+    print(f"MMA final benchmark (B={B}, H={H}, D={D}, FP16, non-causal) — "
           f"median of {REPS} interleaved reps, spread in parens")
     print(f"GPU: {torch.cuda.get_device_name(0)}  torch {torch.__version__}")
     print("=" * 100)
@@ -62,7 +62,7 @@ def main():
         mod_db.forward_only(Qb, Qb, Qb)
     torch.cuda.synchronize()
 
-    hdr = f"{'N':>6} | {'fa3 (ms)':>22} | {'fa3-db (ms)':>22} | {'sdpa-flash (ms)':>22} | {'db/sdpa':>7}"
+    hdr = f"{'N':>6} | {'mma (ms)':>22} | {'mma-db (ms)':>22} | {'sdpa-flash (ms)':>22} | {'db/sdpa':>7}"
     print(hdr)
     print("-" * 100)
     for N in [128, 256, 512, 1024, 2048, 4096]:
@@ -73,7 +73,7 @@ def main():
         warmup = 30
         iters = 200 if N <= 512 else (100 if N <= 2048 else 50)
 
-        def run_fa3():
+        def run_mma():
             return time_once(lambda: mod.forward_only(Q, K, V), warmup, iters)
 
         def run_db():
@@ -84,8 +84,8 @@ def main():
                 return time_once(
                     lambda: F.scaled_dot_product_attention(Q, K, V), warmup, iters)
 
-        runners = {"fa3": run_fa3, "db": run_db, "sdpa": run_sdpa}
-        base = ["fa3", "db", "sdpa"]
+        runners = {"mma": run_mma, "db": run_db, "sdpa": run_sdpa}
+        base = ["mma", "db", "sdpa"]
         times = {k: [] for k in base}
         for r in range(REPS):
             order = base[r % 3:] + base[:r % 3]   # rotate order each rep
@@ -95,7 +95,7 @@ def main():
         def fmt(ts):
             return f"{med(ts):8.4f} ({min(ts):.4f}..{max(ts):.4f})"
 
-        print(f"{N:>6} | {fmt(times['fa3']):>22} | {fmt(times['db']):>22} | "
+        print(f"{N:>6} | {fmt(times['mma']):>22} | {fmt(times['db']):>22} | "
               f"{fmt(times['sdpa']):>22} | "
               f"{med(times['db']) / med(times['sdpa']):>6.2f}x")
 

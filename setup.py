@@ -28,10 +28,10 @@ setup(
                 ],
             },
         ),
-        # 3rd-gen kernel: mma.sync + ldmatrix, register-resident softmax
+        # mma.sync + ldmatrix, register-resident softmax
         CUDAExtension(
-            name="flash_attn_fa3",
-            sources=["cuda/flash_attn_fa3.cu"],
+            name="flash_attn_mma",
+            sources=["cuda/flash_attn_mma.cu"],
             extra_compile_args={
                 "nvcc": [
                     "-O3",
@@ -40,10 +40,10 @@ setup(
                 ],
             },
         ),
-        # 3rd-gen kernel + cp.async K/V double buffering
+        # mma.sync kernel + cp.async K/V double buffering
         CUDAExtension(
-            name="flash_attn_fa3_db",
-            sources=["cuda/flash_attn_fa3_db.cu"],
+            name="flash_attn_mma_db",
+            sources=["cuda/flash_attn_mma_db.cu"],
             extra_compile_args={
                 "nvcc": [
                     "-O3",
@@ -54,8 +54,8 @@ setup(
         ),
         # db + address strength reduction
         CUDAExtension(
-            name="flash_attn_fa3_db_addr",
-            sources=["cuda/flash_attn_fa3_db_addr.cu"],
+            name="flash_attn_mma_db_addr",
+            sources=["cuda/flash_attn_mma_db_addr.cu"],
             extra_compile_args={
                 "nvcc": [
                     "-O3",
@@ -66,8 +66,8 @@ setup(
         ),
         # db_addr + FULL_TILES specialization (current best)
         CUDAExtension(
-            name="flash_attn_fa3_db_full",
-            sources=["cuda/flash_attn_fa3_db_full.cu"],
+            name="flash_attn_mma_db_full",
+            sources=["cuda/flash_attn_mma_db_full.cu"],
             extra_compile_args={
                 "nvcc": [
                     "-O3",

@@ -11,10 +11,10 @@ from torch.nn.attention import sdpa_kernel, SDPBackend
 from torch.utils.cpp_extension import load
 
 FLAGS = ["-O3", "--use_fast_math", "-gencode=arch=compute_89,code=sm_89"]
-mod_full = load(name="flash_attn_fa3_db_full", sources=["cuda/flash_attn_fa3_db_full.cu"],
+mod_full = load(name="flash_attn_mma_db_full", sources=["cuda/flash_attn_mma_db_full.cu"],
                 extra_cuda_cflags=FLAGS, verbose=False)
-mod_intl = load(name="flash_attn_fa3_db_full_intl",
-                sources=["cuda/flash_attn_fa3_db_full_intl.cu"],
+mod_intl = load(name="flash_attn_mma_db_full_intl",
+                sources=["cuda/flash_attn_mma_db_full_intl.cu"],
                 extra_cuda_cflags=FLAGS, verbose=False)
 for _m in (mod_full, mod_intl):
     print(f"so: {_m.__file__}")

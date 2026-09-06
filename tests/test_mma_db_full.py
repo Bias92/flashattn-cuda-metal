@@ -1,4 +1,4 @@
-"""FA3 db_full (FULL_TILES specialization): correctness vs half-cast FP32 reference.
+"""MMA db_full (FULL_TILES specialization): correctness vs half-cast FP32 reference.
 
 Covers BOTH dispatch paths:
   - full   (N % 64 == 0): N = 64, 128, 1024, 2048, 4096
@@ -8,8 +8,8 @@ import torch
 from torch.utils.cpp_extension import load
 
 mod = load(
-    name="flash_attn_fa3_db_full",
-    sources=["cuda/flash_attn_fa3_db_full.cu"],
+    name="flash_attn_mma_db_full",
+    sources=["cuda/flash_attn_mma_db_full.cu"],
     extra_cuda_cflags=["-O3", "--use_fast_math", "-gencode=arch=compute_89,code=sm_89"],
     verbose=False,
 )
@@ -33,15 +33,15 @@ def test_config(B, H, N, D, device="cuda", dtype=torch.float32, amp=1.0):
 
     Qh, Kh, Vh = Q.half().float(), K.half().float(), V.half().float()
     O_ref, L_ref = naive_attention(Qh, Kh, Vh)
-    O_fa3, L_fa3 = mod.forward(Q, K, V)
-    O_fa3 = O_fa3.float()
+    O_mma, L_mma = mod.forward(Q, K, V)
+    O_mma = O_mma.float()
     O_only = mod.forward_only(Q, K, V).float()
-    oo_same = torch.equal(O_only, O_fa3)
+    oo_same = torch.equal(O_only, O_mma)
 
-    O_diff = (O_fa3 - O_ref).abs().max().item()
-    L_diff = (L_fa3 - L_ref).abs().max().item()
-    ok = (torch.allclose(O_fa3, O_ref, atol=2e-3 * max(amp, 1.0), rtol=2e-3)
-          and torch.allclose(L_fa3, L_ref, atol=2e-3, rtol=1e-3)
+    O_diff = (O_mma - O_ref).abs().max().item()
+    L_diff = (L_mma - L_ref).abs().max().item()
+    ok = (torch.allclose(O_mma, O_ref, atol=2e-3 * max(amp, 1.0), rtol=2e-3)
+          and torch.allclose(L_mma, L_ref, atol=2e-3, rtol=1e-3)
           and oo_same)
     path = "full" if (N % BR == 0 and N % BC == 0) else "guarded"
     tag = f" dtype={str(dtype).split('.')[-1]}" if dtype != torch.float32 else ""
@@ -53,7 +53,7 @@ def test_config(B, H, N, D, device="cuda", dtype=torch.float32, amp=1.0):
 
 def main():
     print("=" * 90)
-    print("FA3 db_full (FULL_TILES specialization) Correctness Test")
+    print("MMA db_full (FULL_TILES specialization) Correctness Test")
     print("=" * 90)
     configs = [
         # full path
