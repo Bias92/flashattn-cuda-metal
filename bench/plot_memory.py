@@ -21,7 +21,7 @@ OUT = ROOT / "docs" / "profiling" / "memory.png"
 N = [1024, 2048, 4096, 8192]
 series = [
     ("Custom CUDA (O+L)", [1.0, 2.1, 4.1, 8.2], "#2a78d6"),
-    ("PyTorch SDPA Flash", [1.0, 2.1, 4.1, 8.3], "#eb6834"),
+    ("PyTorch SDPA (FA2)", [1.0, 2.1, 4.1, 8.3], "#eb6834"),
     ("HF eager attention", [64.0, 256.0, 1024.0, 4096.0], "#1baf7a"),
 ]
 
